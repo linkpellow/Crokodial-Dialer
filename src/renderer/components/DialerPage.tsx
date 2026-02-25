@@ -614,7 +614,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
           {/* Keypad: 3x4 grid + backspace aligned with # */}
           <div className="flex-1 min-h-0 mt-2.5 flex flex-col overflow-visible">
             <div className="flex-1 min-h-0 flex items-center justify-center overflow-visible">
-              <div className="grid grid-cols-3 gap-2.5 aspect-[3/5] h-[88%] max-h-full w-auto max-w-full [grid-template-rows:repeat(5,minmax(0,1fr))]">
+              <div className="grid grid-cols-3 gap-2 aspect-[3/5] h-[74%] max-h-full w-auto max-w-full [grid-template-rows:repeat(5,minmax(0,1fr))]">
                 {KEYPAD_KEYS.map((row) =>
                   row.map((key) => (
                     <motion.button
@@ -624,7 +624,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                       whileTap={keypadTapGlow}
                       whileHover={{ scale: 1.04 }}
                       transition={{ duration: 0.1 }}
-                      className="aspect-square w-full max-w-full h-full max-h-full rounded-full text-white text-xl font-medium flex items-center justify-center min-w-0 min-h-0"
+                      className="aspect-square w-full max-w-full h-full max-h-full rounded-full text-white text-base font-medium flex items-center justify-center min-w-0 min-h-0"
                       style={{
                         WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
                         backgroundColor: state.keypadColor,
@@ -644,7 +644,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                   whileTap={keypadTapGlow}
                   transition={{ duration: 0.1 }}
                   whileHover={{ scale: 1.04 }}
-                  className="aspect-square w-full max-w-full h-full max-h-full rounded-full text-white text-xl font-medium flex items-center justify-center min-w-0 min-h-0"
+                  className="aspect-square w-full max-w-full h-full max-h-full rounded-full text-white text-base font-medium flex items-center justify-center min-w-0 min-h-0"
                   style={{
                     WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
                     backgroundColor: state.keypadColor,
