@@ -585,9 +585,6 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
               >
           {/* Number input - frosted */}
           <div className="shrink-0 flex flex-col gap-1">
-            <label htmlFor="phone-input" className="text-white/90 text-xs font-medium">
-              Number
-            </label>
             <input
               id="phone-input"
               type="tel"
