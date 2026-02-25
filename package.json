@@ -1,0 +1,62 @@
+{
+  "name": "crokodial-dialer",
+  "version": "1.0.0",
+  "description": "Crokodial Dialer - Standalone Electron telephony application",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run start:renderer\" \"npm run start:main\"",
+    "start:main": "npm run build:main && wait-on http://localhost:5173 && electron .",
+    "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "build": "npm run build:main && vite build",
+    "pack": "npm run build && electron-builder",
+    "pack:mac": "npm run build && electron-builder --mac",
+    "pack:win": "npm run build && electron-builder --win",
+    "start:renderer": "vite"
+  },
+  "keywords": [
+    "dialer",
+    "telnyx",
+    "webrtc",
+    "electron"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@telnyx/webrtc": "^2.22.0",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "events": "^3.3.0",
+    "framer-motion": "^12.34.3",
+    "lucide-react": "^0.468.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.15",
+    "vite": "^6.0.1",
+    "wait-on": "^8.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.crokodial.dialer",
+    "productName": "Crokodial Dialer",
+    "files": ["dist/**/*", "dist-renderer/**/*"],
+    "directories": { "output": "release" },
+    "mac": {
+      "icon": "public/power-dialer.png",
+      "category": "public.app-category.business",
+      "target": "dmg"
+    },
+    "win": {
+      "icon": "public/power-dialer.png",
+      "target": "nsis"
+    }
+  }
+}
