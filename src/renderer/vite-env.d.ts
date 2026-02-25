@@ -22,6 +22,7 @@ interface SerializedFetchResponse {
 
 interface DialerAPI {
   minimize: () => Promise<void>;
+  maximize: () => Promise<void>;
   close: () => Promise<void>;
   showWindow: () => Promise<void>;
   windowResize?: (mode: 'full' | 'compact') => Promise<void>;

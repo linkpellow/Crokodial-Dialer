@@ -256,6 +256,16 @@ ipcMain.handle('window-close', () => {
   }
 });
 
+ipcMain.handle('window-maximize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
 ipcMain.handle('window-show', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();

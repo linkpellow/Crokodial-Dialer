@@ -8,6 +8,7 @@ interface ApiFetchOptions {
 
 contextBridge.exposeInMainWorld('dialer', {
   minimize: () => ipcRenderer.invoke('window-minimize'),
+  maximize: () => ipcRenderer.invoke('window-maximize'),
   close: () => ipcRenderer.invoke('window-close'),
   showWindow: () => ipcRenderer.invoke('window-show'),
   windowResize: (mode: 'full' | 'compact') => ipcRenderer.invoke('window-resize', mode),

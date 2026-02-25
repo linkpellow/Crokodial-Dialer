@@ -257,7 +257,36 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
         >
           <div className="flex items-center justify-between px-3 py-2.5">
             <div className="flex items-center gap-2">
-              <h1 className="text-white/95 font-semibold text-sm tracking-wide">Crokodial</h1>
+              {/* macOS-style traffic light window controls */}
+              <div className="flex items-center gap-1.5 group" style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}>
+                <button
+                  type="button"
+                  onClick={() => window.dialer?.close()}
+                  className="w-3 h-3 rounded-full flex items-center justify-center transition-opacity"
+                  style={{ background: '#FF5F57' }}
+                  title="Close"
+                >
+                  <span className="opacity-0 group-hover:opacity-100 text-[#820005] leading-none" style={{ fontSize: '9px', fontWeight: 700 }}>✕</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.dialer?.minimize()}
+                  className="w-3 h-3 rounded-full flex items-center justify-center transition-opacity"
+                  style={{ background: '#FEBC2E' }}
+                  title="Minimize"
+                >
+                  <span className="opacity-0 group-hover:opacity-100 text-[#7d5000] leading-none" style={{ fontSize: '9px', fontWeight: 700 }}>−</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.dialer?.maximize()}
+                  className="w-3 h-3 rounded-full flex items-center justify-center transition-opacity"
+                  style={{ background: '#28C840' }}
+                  title="Maximize"
+                >
+                  <span className="opacity-0 group-hover:opacity-100 text-[#006500] leading-none" style={{ fontSize: '9px', fontWeight: 700 }}>+</span>
+                </button>
+              </div>
               <motion.button
                 type="button"
                 onClick={() => (autoDial.isActive ? autoDial.actions.stopAutoDial() : autoDial.actions.startAutoDial())}
@@ -367,32 +396,6 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                 title="Log out"
               >
                 <LogOut size={14} />
-              </motion.button>
-              <motion.button
-                type="button"
-                onClick={() => window.dialer?.minimize()}
-                whileTap={btnTap}
-                whileHover={btnHover}
-                className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
-                style={{
-                  background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
-                }}
-              >
-                −
-              </motion.button>
-              <motion.button
-                type="button"
-                onClick={() => window.dialer?.close()}
-                whileTap={btnTap}
-                whileHover={btnHover}
-                className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
-                style={{
-                  background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
-                }}
-              >
-                ×
               </motion.button>
             </div>
           </div>
