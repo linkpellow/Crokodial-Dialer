@@ -266,6 +266,67 @@ export interface DialerLeadsResponse {
   pagination?: { total: number; totalPages: number; limit: number; page?: number };
 }
 
+// ─── Contacts (aligned with Crokodial shared/src/types.ts Contact DTO) ────────
+
+/** Contact returned by GET /api/contacts */
+export interface Contact {
+  id: number;
+  e164: string;
+  opt_status: 'opted_in' | 'opted_out' | 'unknown';
+  firstName?: string;
+  lastName?: string;
+  /** Legacy snake_case columns — backend may return either casing */
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  city?: string;
+  state?: string;
+  zipcode?: string;
+  address?: string;
+  custom_fields?: string;
+  tags?: string;
+  is_pinned?: number;
+  list_id?: number;
+  user_id?: number;
+  tenant_id?: number;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+  last_call_disposition?: string;
+  last_call_date?: string;
+  call_notes?: string;
+  total_calls?: number;
+  opt_out_timestamp?: string;
+  opted_in_at?: string;
+  locale?: string;
+  geo_country?: string;
+  geo_region?: string;
+  client_status?: string;
+}
+
+export interface ContactsPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasMore: boolean;
+}
+
+export interface ContactsResponse {
+  contacts: Contact[];
+  pagination: ContactsPagination;
+}
+
+/** Thrown when the backend returns 403 ENTITLEMENT_DENIED:dialer */
+export class ContactsEntitlementError extends Error {
+  constructor() {
+    super(
+      'Contacts require an active dialer plan. Please check your subscription at crokodial.com.'
+    );
+    this.name = 'ContactsEntitlementError';
+  }
+}
+
 export interface FilterOptionsResponse {
   states?: string[];
   dispositions?: string[];
@@ -377,4 +438,90 @@ export async function saveDisposition(
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg || 'Network error' };
   }
+}
+
+// ─── Contacts API ─────────────────────────────────────────────────────────────
+
+const CONTACTS_EMPTY: ContactsResponse = {
+  contacts: [],
+  pagination: { page: 1, limit: 25, total: 0, totalPages: 0, hasMore: false },
+};
+
+/**
+ * GET /api/contacts — paginated, tenant-scoped contact list.
+ *
+ * Alignment rules:
+ *  - search is only forwarded when >= 3 characters (server returns empty for shorter)
+ *  - includePagination is always true
+ *  - throws ContactsEntitlementError on 403 ENTITLEMENT_DENIED:dialer
+ *  - throws Error on any other non-2xx response
+ */
+export async function fetchContacts(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  filter?: 'all' | 'unread' | 'recent' | 'archived';
+  tagId?: number | null;
+} = {}): Promise<ContactsResponse> {
+  const sp = new URLSearchParams();
+  sp.set('includePagination', 'true');
+  if (params.page && params.page > 1) sp.set('page', String(params.page));
+  if (params.limit) sp.set('limit', String(params.limit));
+  if (params.search && params.search.trim().length >= 3) sp.set('search', params.search.trim());
+  if (params.filter && params.filter !== 'all') sp.set('filter', params.filter);
+  if (params.tagId != null) sp.set('tagId', String(params.tagId));
+
+  const url = buildUrl(`/api/contacts?${sp.toString()}`);
+  if (!url) return CONTACTS_EMPTY;
+
+  let res: Response;
+  try {
+    res = await authenticatedFetch(url);
+  } catch (err) {
+    throw new Error(extractErrorMessage(err) || 'Network error loading contacts');
+  }
+
+  if (res.status === 403) {
+    let code = '';
+    try {
+      const body = (await res.clone().json()) as { error?: { code?: string } };
+      code = body?.error?.code ?? '';
+    } catch { /* ignore */ }
+    if (code.startsWith('ENTITLEMENT_DENIED')) throw new ContactsEntitlementError();
+    throw new Error('Access denied.');
+  }
+
+  if (!res.ok) {
+    let msg = `Server error (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string; error?: { message?: string } };
+      const raw = body?.error?.message ?? body?.message;
+      if (raw) msg = extractErrorMessage(raw) || msg;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+
+  try {
+    const raw = (await res.json()) as { data?: unknown } & unknown;
+    const payload = (raw as { data?: unknown })?.data ?? raw;
+    const p = payload as { contacts?: Contact[]; pagination?: ContactsPagination };
+    return {
+      contacts: Array.isArray(p.contacts) ? p.contacts : [],
+      pagination: p.pagination ?? CONTACTS_EMPTY.pagination,
+    };
+  } catch {
+    return CONTACTS_EMPTY;
+  }
+}
+
+/**
+ * GET /api/contacts/:id — single contact.
+ * Returns null on 404, 403, or parse failure (all silent).
+ */
+export async function fetchContact(id: number): Promise<Contact | null> {
+  const url = buildUrl(`/api/contacts/${encodeURIComponent(String(id))}`);
+  const body = await fetchJson<{ data?: Contact } & Contact>(url);
+  if (!body) return null;
+  const payload = (body as { data?: Contact })?.data ?? body;
+  return (payload as Contact)?.id ? (payload as Contact) : null;
 }

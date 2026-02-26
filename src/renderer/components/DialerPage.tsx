@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, MoreHorizontal, Pause, Phone, PhoneOff, Play, LogOut, Volume2, Zap, Tag, ChevronDown, Settings } from 'lucide-react';
 import { useAutoDialer } from '@/renderer/hooks/useAutoDialer';
-import { saveDisposition, fetchFilterOptions } from '@/renderer/services/dialerApiService';
+import { saveDisposition, fetchFilterOptions, fetchContacts } from '@/renderer/services/dialerApiService';
 import { DispositionModal } from '@/renderer/components/DispositionModal';
 import { GlassCheckbox } from '@/renderer/components/ui/GlassCheckbox';
 import { AudioSpectrum } from '@/renderer/components/AudioSpectrum';
@@ -47,6 +47,92 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
   const audioRef = useRef<HTMLAudioElement>(null);
   const ringbackRef = useRef<HTMLAudioElement | null>(null);
   const lastResizeModeRef = useRef<'compact' | 'full' | null>(null);
+
+  // ── Contact name resolution ────────────────────────────────────────────────
+  // Resolved display name for the active call (from leadContext or async lookup)
+  const [resolvedContactName, setResolvedContactName] = useState<string | null>(null);
+  const lookupInitiatedRef = useRef(false);
+  const lookupAbortRef = useRef<AbortController | null>(null);
+  // Track whether the call ever reached in_call — distinguishes "Call Ended" from "Invalid"
+  const callWasConnectedRef = useRef(false);
+
+  useEffect(() => {
+    if (state.uiState === 'idle') {
+      setResolvedContactName(null);
+      callWasConnectedRef.current = false;
+      lookupInitiatedRef.current = false;
+      lookupAbortRef.current?.abort();
+      lookupAbortRef.current = null;
+      return;
+    }
+
+    if (state.uiState === 'in_call') {
+      callWasConnectedRef.current = true;
+    }
+
+    // Prefer the name already in lead context
+    const ctxName = state.leadContext?.leadName;
+    if (ctxName && ctxName !== 'Unknown') {
+      setResolvedContactName(ctxName);
+      return;
+    }
+
+    // For manual / inbound dials: look up the number in the contacts DB (best-effort)
+    if (
+      !lookupInitiatedRef.current &&
+      (state.uiState === 'dialing' || state.uiState === 'ringing') &&
+      state.phoneNumber &&
+      state.phoneNumber.replace(/\D/g, '').length >= 3
+    ) {
+      lookupInitiatedRef.current = true;
+      lookupAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      lookupAbortRef.current = ctrl;
+
+      fetchContacts({ search: state.phoneNumber, limit: 1 })
+        .then((res) => {
+          if (ctrl.signal.aborted) return;
+          const c = res.contacts[0];
+          if (!c) return;
+          const first = c.firstName ?? c.first_name ?? '';
+          const last  = c.lastName  ?? c.last_name  ?? '';
+          const name  = `${first} ${last}`.trim();
+          if (name) setResolvedContactName(name);
+        })
+        .catch(() => {}); // lookup is best-effort; silent fail
+    }
+  }, [state.uiState, state.phoneNumber, state.leadContext?.leadName]);
+
+  // ── Call status label ──────────────────────────────────────────────────────
+  const getCallStatusLabel = (): { text: string; color: string; pulse: boolean } | null => {
+    switch (state.uiState) {
+      case 'dialing':
+        return { text: 'Calling', color: 'rgba(255,196,0,0.95)', pulse: true };
+      case 'ringing':
+        return state.callDirection === 'inbound'
+          ? { text: 'Incoming', color: 'rgba(52,199,89,0.95)', pulse: true }
+          : { text: 'Calling',  color: 'rgba(255,196,0,0.95)', pulse: true };
+      case 'in_call':
+        return { text: 'Connected', color: 'rgba(52,199,89,1)', pulse: false };
+      case 'held':
+        return { text: 'On Hold', color: 'rgba(255,159,10,0.9)', pulse: false };
+      case 'ended':
+        return callWasConnectedRef.current
+          ? { text: 'Call Ended', color: 'rgba(255,255,255,0.5)',  pulse: false }
+          : { text: 'Invalid',    color: 'rgba(255,69,58,0.9)', pulse: false };
+      default:
+        return null;
+    }
+  };
+
+  // Format E.164 → "(NXX) NXX-XXXX" for display
+  const formatDisplayPhone = (raw: string) => {
+    const d = raw.replace(/\D/g, '');
+    if (d.length === 11 && d[0] === '1') return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    return raw;
+  };
+
   useEffect(() => {
     fetchFilterOptions().then((opts) =>
       setFilterOptions({ dispositions: opts.dispositions ?? [] })
@@ -699,29 +785,105 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                 transition={{ duration: 0.25 }}
                 className="flex-1 flex flex-col min-h-0 p-3 gap-2.5 overflow-visible"
               >
-          {/* Number input - frosted */}
-          <div className="shrink-0 flex flex-col gap-1">
-            <input
-              id="phone-input"
-              type="tel"
-              value={state.phoneNumber}
-              onChange={(e) => actions.setPhoneNumber(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (state.uiState === 'ringing') actions.answerCall();
-                  else actions.startCall();
-                }
-              }}
-              placeholder="Enter number"
-              className="w-full text-white rounded-lg px-3 py-2.5 text-sm placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-1 focus:ring-offset-transparent"
-              style={{
-                WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
-                background: 'rgba(26, 61, 26, 0.7)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.05)',
-              }}
-            />
+          {/* Phone input (idle) or Call Info Card (active call) */}
+          <div className="shrink-0">
+            <AnimatePresence mode="wait">
+              {state.uiState === 'idle' ? (
+                <motion.div
+                  key="phone-input"
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 5 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                >
+                  <input
+                    id="phone-input"
+                    type="tel"
+                    value={state.phoneNumber}
+                    onChange={(e) => actions.setPhoneNumber(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (state.uiState === 'ringing') actions.answerCall();
+                        else actions.startCall();
+                      }
+                    }}
+                    placeholder="Enter number"
+                    className="w-full text-white rounded-lg px-3 py-2.5 text-sm placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-white/40 focus:ring-offset-1 focus:ring-offset-transparent"
+                    style={{
+                      WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
+                      background: 'rgba(26, 61, 26, 0.7)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.05)',
+                    }}
+                  />
+                </motion.div>
+              ) : (() => {
+                const status = getCallStatusLabel();
+                const displayName = resolvedContactName || state.leadContext?.leadName || '';
+                const displayPhone = formatDisplayPhone(state.phoneNumber);
+                return (
+                  <motion.div
+                    key="call-info"
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="w-full rounded-lg px-3 py-2.5 flex flex-col gap-0.5"
+                    style={{
+                      WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
+                      background: 'rgba(26, 61, 26, 0.7)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.25), inset 0 -1px 0 rgba(255,255,255,0.05)',
+                    }}
+                  >
+                    {/* Status row */}
+                    {status && (
+                      <AnimatePresence mode="wait">
+                        <motion.div
+                          key={status.text}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.18 }}
+                          className="flex items-center gap-1.5"
+                        >
+                          <motion.span
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ background: status.color }}
+                            animate={status.pulse ? { opacity: [1, 0.25, 1], scale: [1, 0.75, 1] } : { opacity: 1, scale: 1 }}
+                            transition={status.pulse ? { repeat: Infinity, duration: 1.15, ease: 'easeInOut' } : {}}
+                          />
+                          <span
+                            className="text-[11px] font-semibold tracking-widest uppercase"
+                            style={{ color: status.color }}
+                          >
+                            {status.text}
+                          </span>
+                        </motion.div>
+                      </AnimatePresence>
+                    )}
+                    {/* Contact name */}
+                    <AnimatePresence mode="wait">
+                      <motion.p
+                        key={displayName || displayPhone}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.22 }}
+                        className="text-white font-semibold text-sm truncate leading-tight"
+                      >
+                        {displayName || displayPhone}
+                      </motion.p>
+                    </AnimatePresence>
+                    {/* Phone (shown below name when name is known) */}
+                    {displayName && displayName !== displayPhone && (
+                      <p className="text-white/45 text-[11px] truncate">{displayPhone}</p>
+                    )}
+                  </motion.div>
+                );
+              })()}
+            </AnimatePresence>
           </div>
 
           {/* Audio spectrum — visible during call, CRT shutdown on hang-up */}
