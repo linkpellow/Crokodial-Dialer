@@ -886,8 +886,10 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
             </AnimatePresence>
           </div>
 
-          {/* Audio spectrum — visible during call, CRT shutdown on hang-up */}
-          {spectrumVisible && (
+          {/* Audio spectrum — visible while calling and during call, CRT shutdown on hang-up */}
+          {(spectrumVisible ||
+            state.uiState === 'dialing' ||
+            state.uiState === 'ringing') && (
             <AudioSpectrum
               key="spectrum"
               stream={crtShutDown ? lastRemoteStreamRef.current : (state.remoteStream ?? null)}
