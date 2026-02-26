@@ -12,6 +12,7 @@ import { useAutoDialer } from '@/renderer/hooks/useAutoDialer';
 import { saveDisposition, fetchFilterOptions } from '@/renderer/services/dialerApiService';
 import { DispositionModal } from '@/renderer/components/DispositionModal';
 import { GlassCheckbox } from '@/renderer/components/ui/GlassCheckbox';
+import { AudioSpectrum } from '@/renderer/components/AudioSpectrum';
 
 const KEYPAD_KEYS = [
   ['1', '2', '3'],
@@ -287,28 +288,41 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                   <span className="opacity-0 group-hover:opacity-100 text-[#006500] leading-none" style={{ fontSize: '9px', fontWeight: 700 }}>+</span>
                 </button>
               </div>
-              <motion.button
-                type="button"
-                onClick={() => (autoDial.isActive ? autoDial.actions.stopAutoDial() : autoDial.actions.startAutoDial())}
-                whileTap={btnTap}
-                whileHover={btnHover}
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors"
-                style={{
-                  WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
-                  background: autoDial.isActive ? 'rgba(52,199,89,0.4)' : 'rgba(255,255,255,0.1)',
-                  color: 'white',
-                }}
-                title={autoDial.isActive ? 'Stop auto-dial' : 'Start auto-dial'}
-              >
-                <Zap size={12} />
-                {autoDial.isActive ? 'Stop' : 'Auto'}
-              </motion.button>
-              {autoDial.status === 'queueEmpty' && (
-                <span className="text-white/80 text-xs">Queue Empty</span>
-              )}
-              {autoDial.status === 'disconnected' && (
-                <span className="text-amber-300/90 text-xs">Reconnect to dial</span>
-              )}
+              <AnimatePresence>
+                {!isInCall && (
+                  <motion.div
+                    key="toolbar-left"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex items-center gap-2"
+                  >
+                    <motion.button
+                      type="button"
+                      onClick={() => (autoDial.isActive ? autoDial.actions.stopAutoDial() : autoDial.actions.startAutoDial())}
+                      whileTap={btnTap}
+                      whileHover={btnHover}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+                      style={{
+                        WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
+                        background: autoDial.isActive ? 'rgba(52,199,89,0.4)' : 'rgba(255,255,255,0.1)',
+                        color: 'white',
+                      }}
+                      title={autoDial.isActive ? 'Stop auto-dial' : 'Start auto-dial'}
+                    >
+                      <Zap size={12} />
+                      {autoDial.isActive ? 'Stop' : 'Auto'}
+                    </motion.button>
+                    {autoDial.status === 'queueEmpty' && (
+                      <span className="text-white/80 text-xs">Queue Empty</span>
+                    )}
+                    {autoDial.status === 'disconnected' && (
+                      <span className="text-amber-300/90 text-xs">Reconnect to dial</span>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <div className="relative z-[150] hidden" ref={dispositionsRef}>
                 <button
                   type="button"
@@ -368,36 +382,48 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                 </AnimatePresence>
               </div>
             </div>
-            <div className="flex gap-1.5" style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}>
-              <motion.button
-                type="button"
-                onClick={onOpenSettings}
-                whileTap={btnTap}
-                whileHover={btnHover}
-                className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
-                style={{
-                  background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
-                }}
-                title="Settings"
-              >
-                <Settings size={14} />
-              </motion.button>
-              <motion.button
-                type="button"
-                onClick={onLogout}
-                whileTap={btnTap}
-                whileHover={btnHover}
-                className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
-                style={{
-                  background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
-                }}
-                title="Log out"
-              >
-                <LogOut size={14} />
-              </motion.button>
-            </div>
+            <AnimatePresence>
+              {!isInCall && (
+                <motion.div
+                  key="toolbar-right"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex gap-1.5"
+                  style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}
+                >
+                  <motion.button
+                    type="button"
+                    onClick={onOpenSettings}
+                    whileTap={btnTap}
+                    whileHover={btnHover}
+                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
+                    style={{
+                      background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
+                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
+                    }}
+                    title="Settings"
+                  >
+                    <Settings size={14} />
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    onClick={onLogout}
+                    whileTap={btnTap}
+                    whileHover={btnHover}
+                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
+                    style={{
+                      background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
+                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
+                    }}
+                    title="Log out"
+                  >
+                    <LogOut size={14} />
+                  </motion.button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           {/* Liquid-fill connection progress bar */}
           <div className="h-0.5 w-full overflow-hidden bg-black/20">
@@ -610,6 +636,13 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
               }}
             />
           </div>
+
+          {/* Audio spectrum — visible only during an active call */}
+          <AnimatePresence>
+            {isInCall && (
+              <AudioSpectrum key="spectrum" stream={state.remoteStream ?? null} />
+            )}
+          </AnimatePresence>
 
           {/* Keypad: 3x4 grid + backspace aligned with # */}
           <div className="flex-1 min-h-0 mt-2.5 flex flex-col overflow-visible">
