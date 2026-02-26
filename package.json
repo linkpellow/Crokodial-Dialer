@@ -40,15 +40,20 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.6.3",
     "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.3"
   },
   "build": {
     "appId": "com.crokodial.dialer",
     "productName": "Crokodial Dialer",
-    "files": ["dist/**/*", "dist-renderer/**/*"],
-    "directories": { "output": "release" },
+    "files": [
+      "dist/**/*",
+      "dist-renderer/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
     "mac": {
       "icon": "public/power-dialer.png",
       "category": "public.app-category.business",
