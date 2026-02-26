@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Pause, Phone, PhoneOff, Play, LogOut, Volume2, Zap, Tag, ChevronDown, Settings } from 'lucide-react';
+import { Mic, MicOff, MoreHorizontal, Pause, Phone, PhoneOff, Play, LogOut, Volume2, Zap, Tag, ChevronDown, Settings } from 'lucide-react';
 import { useAutoDialer } from '@/renderer/hooks/useAutoDialer';
 import { saveDisposition, fetchFilterOptions } from '@/renderer/services/dialerApiService';
 import { DispositionModal } from '@/renderer/components/DispositionModal';
@@ -42,6 +42,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
   const [filterOptions, setFilterOptions] = useState({ dispositions: [] as string[] });
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dispositionsRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const autoDial = useAutoDialer(actions.startCallWithLead, state.connectionStatus, leadFilters);
   const audioRef = useRef<HTMLAudioElement>(null);
   const ringbackRef = useRef<HTMLAudioElement | null>(null);
@@ -54,7 +55,8 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (dispositionsRef.current && !dispositionsRef.current.contains(e.target as Node)) {
+      const activeRef = openDropdown === 'menu' ? menuRef : dispositionsRef;
+      if (activeRef.current && !activeRef.current.contains(e.target as Node)) {
         setOpenDropdown(null);
       }
     };
@@ -331,22 +333,48 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                     transition={{ duration: 0.2 }}
                     className="flex items-center gap-2"
                   >
-                    <motion.button
-                      type="button"
-                      onClick={() => (autoDial.isActive ? autoDial.actions.stopAutoDial() : autoDial.actions.startAutoDial())}
-                      whileTap={btnTap}
-                      whileHover={btnHover}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors"
-                      style={{
-                        WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'],
-                        background: autoDial.isActive ? 'rgba(52,199,89,0.4)' : 'rgba(255,255,255,0.1)',
-                        color: 'white',
-                      }}
-                      title={autoDial.isActive ? 'Stop auto-dial' : 'Start auto-dial'}
+                    <div
+                      className="flex items-center gap-1.5"
+                      style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}
                     >
-                      <Zap size={12} />
-                      {autoDial.isActive ? 'Stop' : 'Auto'}
-                    </motion.button>
+                      <Zap
+                        size={11}
+                        style={{ color: autoDial.isActive ? 'rgba(140,255,70,0.9)' : 'rgba(255,255,255,0.4)', flexShrink: 0, transition: 'color 0.2s' }}
+                      />
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={autoDial.isActive}
+                        onClick={() => (autoDial.isActive ? autoDial.actions.stopAutoDial() : autoDial.actions.startAutoDial())}
+                        title={autoDial.isActive ? 'Stop auto-dial' : 'Start auto-dial'}
+                        style={{
+                          width: 34,
+                          height: 19,
+                          borderRadius: 10,
+                          padding: 2,
+                          position: 'relative',
+                          flexShrink: 0,
+                          cursor: 'pointer',
+                          background: autoDial.isActive ? 'rgba(52,199,89,0.9)' : 'rgba(255,255,255,0.15)',
+                          border: `1px solid ${autoDial.isActive ? 'rgba(52,199,89,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                          transition: 'background 0.2s, border-color 0.2s',
+                          boxShadow: autoDial.isActive ? '0 0 6px rgba(52,199,89,0.35)' : 'none',
+                        }}
+                      >
+                        <motion.span
+                          animate={{ x: autoDial.isActive ? 15 : 0 }}
+                          transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                          style={{
+                            display: 'block',
+                            width: 13,
+                            height: 13,
+                            borderRadius: '50%',
+                            background: 'white',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+                          }}
+                        />
+                      </button>
+                    </div>
                     {autoDial.status === 'queueEmpty' && (
                       <span className="text-white/80 text-xs">Queue Empty</span>
                     )}
@@ -423,37 +451,63 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.2 }}
-                  className="flex gap-1.5"
+                  className="relative"
                   style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}
+                  ref={menuRef}
                 >
                   <motion.button
                     type="button"
-                    onClick={onOpenSettings}
+                    onClick={() => setOpenDropdown((v) => (v === 'menu' ? null : 'menu'))}
                     whileTap={btnTap}
                     whileHover={btnHover}
-                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
+                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white transition-colors"
                     style={{
-                      background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
+                      background: openDropdown === 'menu'
+                        ? 'rgba(255,255,255,0.18)'
+                        : 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
                       boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
                     }}
-                    title="Settings"
+                    title="Menu"
                   >
-                    <Settings size={14} />
+                    <MoreHorizontal size={14} />
                   </motion.button>
-                  <motion.button
-                    type="button"
-                    onClick={onLogout}
-                    whileTap={btnTap}
-                    whileHover={btnHover}
-                    className="w-7 h-7 rounded-md flex items-center justify-center text-white/90 hover:text-white text-xs transition-colors"
-                    style={{
-                      background: 'linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(0,0,0,0.15) 100%)',
-                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.2)',
-                    }}
-                    title="Log out"
-                  >
-                    <LogOut size={14} />
-                  </motion.button>
+                  <AnimatePresence>
+                    {openDropdown === 'menu' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.96 }}
+                        transition={{ duration: 0.12, ease: 'easeOut' }}
+                        className="absolute right-0 top-full mt-1.5 py-1 rounded-lg overflow-hidden"
+                        style={{
+                          minWidth: 140,
+                          background: 'rgba(22, 52, 22, 0.97)',
+                          backdropFilter: 'blur(14px)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                          zIndex: 200,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { onOpenSettings(); setOpenDropdown(null); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-white/85 hover:text-white hover:bg-white/8 transition-colors text-left"
+                        >
+                          <Settings size={13} className="shrink-0 opacity-70" />
+                          Settings
+                        </button>
+                        <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '2px 0' }} />
+                        <button
+                          type="button"
+                          onClick={() => { onLogout(); setOpenDropdown(null); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-400/90 hover:text-red-300 hover:bg-white/8 transition-colors text-left"
+                        >
+                          <LogOut size={13} className="shrink-0" />
+                          Log out
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </motion.div>
               )}
             </AnimatePresence>
