@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd "$(dirname "$0")"
+cd '/Users/linkpellow/crokodialer standalone'
 echo "Switching to feature branch..."
 git fetch origin
 git checkout claude/remove-textbox-label-UQWm2
