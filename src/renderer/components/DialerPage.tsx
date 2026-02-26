@@ -5,7 +5,7 @@
  * @see dialerblueprint.md Section 1 (Visual Framework)
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, Pause, Phone, PhoneOff, Play, LogOut, Volume2, Zap, Tag, ChevronDown, Settings } from 'lucide-react';
 import { useAutoDialer } from '@/renderer/hooks/useAutoDialer';
@@ -114,6 +114,39 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
   const isRinging = state.uiState === 'ringing';
   const showAnswer = isRinging;
   const showCall = state.uiState === 'idle' || state.uiState === 'ended';
+
+  // ── CRT shutdown animation state ──────────────────────────────────────────
+  const [crtShutDown, setCrtShutDown] = useState(false);
+  const [spectrumVisible, setSpectrumVisible] = useState(false);
+  const wasInCallRef = useRef(false);
+  const lastRemoteStreamRef = useRef<MediaStream | null>(null);
+
+  // Keep a reference to the remote stream while in call so the CRT animation
+  // can still feed the analyser during collapse.
+  useEffect(() => {
+    if (isInCall && state.remoteStream) {
+      lastRemoteStreamRef.current = state.remoteStream;
+    }
+  }, [isInCall, state.remoteStream]);
+
+  // Show spectrum when call starts; trigger CRT shutdown when call ends.
+  useEffect(() => {
+    if (isInCall && !wasInCallRef.current) {
+      // Call started
+      setCrtShutDown(false);
+      setSpectrumVisible(true);
+    } else if (!isInCall && wasInCallRef.current) {
+      // Call ended — trigger CRT shutdown instead of instant unmount
+      setCrtShutDown(true);
+    }
+    wasInCallRef.current = isInCall;
+  }, [isInCall]);
+
+  const handleCrtComplete = useCallback(() => {
+    setSpectrumVisible(false);
+    setCrtShutDown(false);
+    lastRemoteStreamRef.current = null;
+  }, []);
 
   // Compact mode is temporarily disabled. Keep a single full layout.
   const showCompactCallView = false;
@@ -637,12 +670,15 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
             />
           </div>
 
-          {/* Audio spectrum — visible only during an active call */}
-          <AnimatePresence>
-            {isInCall && (
-              <AudioSpectrum key="spectrum" stream={state.remoteStream ?? null} />
-            )}
-          </AnimatePresence>
+          {/* Audio spectrum — visible during call, CRT shutdown on hang-up */}
+          {spectrumVisible && (
+            <AudioSpectrum
+              key="spectrum"
+              stream={crtShutDown ? lastRemoteStreamRef.current : (state.remoteStream ?? null)}
+              shutDown={crtShutDown}
+              onShutdownComplete={handleCrtComplete}
+            />
+          )}
 
           {/* Keypad: 3x4 grid + backspace aligned with # */}
           <div className="flex-1 min-h-0 mt-2.5 flex flex-col overflow-visible">
