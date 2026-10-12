@@ -1,0 +1,2 @@
+.assistant-conversation-tools { display: flex; justify-content: flex-end; gap: 5px; padding: 5px 11px; border-bottom: 1px solid #ffffff0c; }
+.assistant-unified .assistant-transcript:empty { padding: 0; }

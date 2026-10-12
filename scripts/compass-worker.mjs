@@ -57,16 +57,56 @@ process.on('message', async ({ id, operation, payload }) => {
       const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
       if (!message || message.length > 16000) throw new Error('Enter a message up to 16,000 characters.');
       if (payload.planId && !catalog.getPlan(payload.planId)) throw new Error('The selected product is no longer in Quotes Compass.');
+      const planIds = payload.planIds == null ? [] : payload.planIds;
+      if (!Array.isArray(planIds) || planIds.length > 8 || planIds.some(id => typeof id !== 'string' || !catalog.getPlan(id))) throw new Error('One or more requested products are no longer in Quotes Compass.');
+      // Import only bounded conversational memory. It is not tool evidence: the
+      // original engine keeps verified tool digests separate from dialogue.
+      const store = await from('src/assistant/conversation-store.js');
+      if (payload.history !== undefined) {
+        if (!Array.isArray(payload.history) || payload.history.length > 12 || payload.history.some(turn => !turn || !['user', 'assistant'].includes(turn.role) || typeof turn.text !== 'string' || turn.text.length > 2000)) throw new Error('Invalid conversation context.');
+        if (payload.conversationId) store.updateSession(payload.conversationId, { history: payload.history.map(turn => ({ role: turn.role, text: turn.text.slice(0, 1200), at: Date.now() })) });
+      }
       const householdModule = await from('src/assistant/household.js');
       const household = householdModule.parseHouseholdFromText(message);
       const simple = householdModule.parseSimpleQuoteRequest(message);
-      const householdRequested = household.members.length > 1 || household.tier !== 'employee' || (simple.tier && simple.tier !== 'employee') || /\b(family|spouse|children|dependents|wife|husband)\b/i.test(message);
+      const quoteInputs = payload.quoteInputs;
+      if (quoteInputs !== undefined && (!quoteInputs || !Number.isInteger(quoteInputs.age) || quoteInputs.age < 0 || quoteInputs.age > 120 || !['employee', 'employee_spouse', 'employee_children', 'employee_family'].includes(quoteInputs.tier) || (quoteInputs.state !== undefined && !/^[A-Z]{2}$/.test(quoteInputs.state)))) throw new Error('Invalid quote inputs. Provide an age, coverage tier and state.');
+      const householdRequested = (quoteInputs && quoteInputs.tier !== 'employee') || household.members.length > 1 || household.tier !== 'employee' || (simple.tier && simple.tier !== 'employee') || /\b(family|spouse|children|dependents|wife|husband)\b/i.test(message);
       const resolvedId = (await from('src/assistant/plan-resolve.js')).resolvePlanIdFromMessage(message, payload.planId);
       const unsupportedHousehold = () => new Error('Golden Rule source pricing is individual-only. A verified household quote is unavailable; select employee-only coverage or use the carrier enrollment quote.');
-      if (householdRequested && catalog.getPlan(resolvedId)?.quoteEngine === 'golden_rule') throw unsupportedHousehold();
+      if (householdRequested && [resolvedId, ...planIds].some(id => catalog.getPlan(id)?.quoteEngine === 'golden_rule')) throw unsupportedHousehold();
       // The original orchestrator preserves quote, benefits, formulary and brochure
       // tools, conversation state and its deterministic fast path before model access.
-      data = await assistant.runAssistantChat({ message, planId: payload.planId || null, conversationId: payload.conversationId });
+      if (quoteInputs !== undefined || planIds.length > 1) {
+        const age = quoteInputs?.age ?? householdModule.extractAgeFromMessage(message, null);
+        const tier = quoteInputs?.tier ?? simple.tier ?? household.tier;
+        if (!Number.isFinite(age) || age < 0 || age > 120) throw new Error('Provide the applicant age before comparing premiums.');
+        const { executeTool } = await from('src/assistant/tools.js');
+        const toolCalls = [];
+        const selectedIds = [...new Set([...(payload.planId ? [payload.planId] : []), ...planIds])];
+        const state = quoteInputs?.state ?? household.state;
+        if (selectedIds.length) {
+          for (const planId of selectedIds) {
+            const args = { planId, age, tier, ...(state ? { state } : {}) };
+            toolCalls.push({ toolName: 'quote', args, result: await executeTool('quote', args) });
+          }
+        } else {
+          const criteria = (await from('src/assistant/plan-criteria.js')).extractPlanCriteria(message);
+          const args = { age, tier, ...(state ? { state } : {}), carriers: criteria.carriers, networks: criteria.networks,
+            planTypes: criteria.planTypes, unknownCarriers: criteria.unknownCarriers, rankBy: criteria.rankBy ?? 'premium',
+            ...(criteria.effectiveDrug ? { drug: criteria.effectiveDrug } : {}),
+            ...(criteria.service?.code ? { serviceCode: criteria.service.code } : {}),
+            ...(criteria.condition?.note ? { conditionNote: criteria.condition.note } : {}), limit: 5 };
+          toolCalls.push({ toolName: 'find_plans', args, result: await executeTool('find_plans', args) });
+        }
+        const { formatPrepassReply } = await from('src/assistant/fast-replies.js');
+        const formatted = toolCalls.map(tool => formatPrepassReply([tool]) ?? { reply: `${catalog.getPlan(tool.args.planId)?.name ?? 'Plan research'}: ${tool.result.message || 'A verified quote is unavailable.'}`, citations: [] });
+        data = { reply: formatted.map(item => item.reply).join('\n\n'), citations: formatted.flatMap(item => item.citations), toolCalls };
+        store.appendConversationTurn(payload.conversationId, 'user', message);
+        store.appendConversationTurn(payload.conversationId, 'assistant', data.reply);
+        const resultIds = selectedIds.length ? selectedIds : toolCalls.flatMap(tool => tool.result.ranked?.map(row => row.planId) ?? []);
+        store.updateSession(payload.conversationId, { lastPlanRefs: resultIds.map(planId => ({ planId, planName: catalog.getPlan(planId)?.name ?? planId })), lastPlanId: resultIds.length === 1 ? resultIds[0] : null });
+      } else data = await assistant.runAssistantChat({ message, planId: payload.planId || planIds[0] || null, conversationId: payload.conversationId });
       // Catch implicitly resolved Golden Rule products in household requests as well.
       if (householdRequested && /premium|quote|cost|price|compare|monthly/i.test(message)) {
         const used = JSON.stringify(data.toolCalls ?? []);

@@ -41,9 +41,9 @@ export async function startAssistantSession(agentId: number): Promise<string> {
   if (!result.sessionId) throw new Error('Crokodial did not create a conversation.');
   return result.sessionId;
 }
-export async function sendAssistantMessage(agentId: number, sessionId: string, message: string): Promise<AssistantReply> {
+export async function sendAssistantMessage(agentId: number, sessionId: string, message: string, workspacePlanHistory: string[] = []): Promise<AssistantReply> {
   const result = await request<AssistantReply>(`/api/ai-agents/${agentId}/test/message`, {
-    method: 'POST', body: JSON.stringify({ sessionId, message, audience: 'agent', requestId: crypto.randomUUID() }),
+    method: 'POST', body: JSON.stringify({ sessionId, message, workspacePlanHistory, audience: 'agent', requestId: crypto.randomUUID() }),
   });
   if (!result.success || !result.message) throw new Error(result.error || 'The assistant could not produce a response.');
   return result;
