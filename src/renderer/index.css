@@ -38,6 +38,9 @@
 }
 
 /* The native shell uses the existing Crokodial green palette and compact geometry. */
+.native-window-frame { height: 100%; display: flex; flex-direction: column; background: #142719; }
+.native-window-titlebar { height: 32px; flex-shrink: 0; -webkit-app-region: drag; }
+.native-window-content { height: 100%; flex: 1; min-height: 0; }
 .unified-shell { height: 100%; display: flex; flex-direction: column; overflow: hidden; border-radius: 10px; background: #142719; color: #f3f8ef; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .workspace-container { flex: 1; min-height: 0; position: relative; }
 .workspace-panel { height: 100%; width: 100%; }

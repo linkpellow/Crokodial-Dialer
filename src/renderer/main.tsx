@@ -11,8 +11,13 @@ if (!root) {
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <ScaleContainer>
-      <App />
-    </ScaleContainer>
+    <div className={window.dialer?.nativeWindowControls ? 'native-window-frame' : 'h-full'}>
+      {window.dialer?.nativeWindowControls && <div className="native-window-titlebar" aria-hidden="true" />}
+      <div className="native-window-content">
+        <ScaleContainer topInset={window.dialer?.nativeWindowControls ? 32 : 0}>
+          <App />
+        </ScaleContainer>
+      </div>
+    </div>
   </React.StrictMode>
 );

@@ -169,8 +169,13 @@ function createWindow(): void {
     maxWidth: MAX_WIDTH,
     maxHeight: MAX_HEIGHT,
     show: false,
-    frame: false,
-    transparent: true,
+    frame: process.platform === 'darwin',
+    transparent: process.platform !== 'darwin',
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hidden' as const,
+      trafficLightPosition: { x: 12, y: 10 },
+      backgroundColor: '#142719',
+    } : {}),
     alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

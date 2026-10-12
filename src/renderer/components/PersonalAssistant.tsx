@@ -121,7 +121,7 @@ export function PersonalAssistant({ active, callActive, callLabel, onReturnToCal
   return <div className="assistant-workspace assistant-unified">
     <header className="assistant-header">
       <div className="assistant-brand"><span className="assistant-mark"><Sparkles size={18}/></span><div><strong>Personal Assistant</strong><small>CROKODIAL WORKSPACE</small></div></div>
-      <button className="icon-button" aria-label="Close window" onClick={() => window.dialer?.close()}><X size={15}/></button>
+      {!window.dialer?.nativeWindowControls && <button className="icon-button" aria-label="Close window" onClick={() => window.dialer?.close()}><X size={15}/></button>}
     </header>
     {callActive && <button className="assistant-call-banner" onClick={onReturnToCall}><Phone size={12}/><span>{callLabel || 'Call in progress'} · Return to dialer</span><i className="live-call-dot"/></button>}
     <div className="assistant-conversation-tools"><button className="icon-button" title="New conversation" aria-label="New conversation" disabled={conversation.busy} onClick={() => void reset()}><Plus size={16}/></button><button className="icon-button" title="Manage Plans in Crokodial" aria-label="Manage Plans" onClick={() => void open('/plans')}><BookOpen size={16}/></button></div>

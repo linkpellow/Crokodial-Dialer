@@ -7,6 +7,7 @@ interface ApiFetchOptions {
 }
 
 contextBridge.exposeInMainWorld('dialer', {
+  nativeWindowControls: process.platform === 'darwin',
   uploadRecordingSegment: (payload: unknown) => ipcRenderer.invoke('recording-upload-segment', payload),
   downloadRecordingAudio: (payload: unknown) => ipcRenderer.invoke('recording-download-audio', payload),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),

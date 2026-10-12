@@ -3,9 +3,10 @@ import { useWindowSize } from '@/renderer/hooks/useWindowSize';
 
 interface ScaleContainerProps {
   children: React.ReactNode;
+  topInset?: number;
 }
 
-export function ScaleContainer({ children }: ScaleContainerProps) {
+export function ScaleContainer({ children, topInset = 0 }: ScaleContainerProps) {
   const { width, height } = useWindowSize();
   const compactHeightThreshold = COMPACT_DESIGN_HEIGHT + 36;
   const isCompactMode = height <= compactHeightThreshold;
@@ -22,7 +23,9 @@ export function ScaleContainer({ children }: ScaleContainerProps) {
       <div
         style={{
           width: DESIGN_WIDTH,
-          height: targetHeight,
+          // Native window buttons are physical pixels, outside the scaled canvas.
+          // Keep the existing content scale and use the remaining vertical space.
+          height: Math.max(1, targetHeight - topInset / scale),
           transform: `scale(${scale})`,
           transformOrigin: 'center center',
         }}

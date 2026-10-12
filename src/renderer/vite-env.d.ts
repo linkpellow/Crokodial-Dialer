@@ -19,6 +19,7 @@ interface SerializedFetchResponse {
 }
 
 interface DialerAPI {
+  readonly nativeWindowControls?: boolean;
   uploadRecordingSegment?: (payload: { contactId: number; sessionId: string; sequence: number; authorization: string; audio: ArrayBuffer; mimeType: string; startOffsetMs: number; endOffsetMs: number }) => Promise<SerializedFetchResponse>;
   downloadRecordingAudio?: (payload: { contactId: number; sessionId: string; sequence: number; authorization: string }) => Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: ArrayBuffer; errorBody?: string }>;
   openExternal?: (url: string) => Promise<void>;

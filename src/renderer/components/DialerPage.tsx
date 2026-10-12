@@ -379,8 +379,8 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
         >
           <div className="flex items-center justify-between px-3 py-2.5">
             <div className="flex items-center gap-2">
-              {/* macOS-style traffic light window controls */}
-              <div className="flex items-center gap-1.5 group" style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}>
+              {/* Other platforms retain the custom window controls. */}
+              {!window.dialer?.nativeWindowControls && <div className="flex items-center gap-1.5 group" style={{ WebkitAppRegion: 'no-drag' as React.CSSProperties['WebkitAppRegion'] }}>
                 <button
                   type="button"
                   onClick={() => window.dialer?.close()}
@@ -408,7 +408,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                 >
                   <span className="opacity-0 group-hover:opacity-100 text-[#006500] leading-none" style={{ fontSize: '9px', fontWeight: 700 }}>+</span>
                 </button>
-              </div>
+              </div>}
               <AnimatePresence>
                 {!isInCall && (
                   <motion.div
