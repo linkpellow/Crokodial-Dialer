@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   appointmentsApi, appointmentName, appointmentKey, appointmentStatusBadge, appointmentTimeSlot, linkedAppointmentContact,
-  localDateValue, shiftAppointmentDate,
+  localDateValue, shiftAppointmentDate, viewerTimeZone,
   type AppointmentDisposition, type AppointmentSelection, type WorkspaceAppointment,
 } from '../services/appointmentsApiService';
 import './appointments.css';
+import { MissionDateInput } from './MissionDateInput';
 
 export function useWorkspaceAppointments(selected: AppointmentSelection | null) {
+  const [timeZone, setTimeZone] = useState(viewerTimeZone);
   const [date, setDate] = useState(() => localDateValue(new Date()));
   const [rows, setRows] = useState<WorkspaceAppointment[]>([]);
   const [catalog, setCatalog] = useState<AppointmentDisposition[]>([]);
@@ -24,8 +26,6 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
   const savingRef = useRef(false), mounted = useRef(true);
   const dateRef = useRef(date); dateRef.current = date;
   const rowsRef = useRef(rows); rowsRef.current = rows;
-  const todayRef = useRef(localDateValue(new Date()));
-  const selectedRef = useRef(selected); selectedRef.current = selected;
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++generation.current; ++catalogGeneration.current; }; }, []);
   const load = useCallback(async (background = false) => {
@@ -33,7 +33,7 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
     const request = ++generation.current;
     if (!background) { setLoading(true); setLoadError(''); }
     try {
-      const next = await appointmentsApi.list(date);
+      const next = await appointmentsApi.list(date, timeZone);
       if (mounted.current && request === generation.current) { setRows(next); setLoadError(''); }
     } catch (failure) {
       if (mounted.current && request === generation.current) {
@@ -41,7 +41,7 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
         setLoadError(failure instanceof Error ? failure.message : 'Unable to refresh appointments.');
       }
     } finally { if (mounted.current && request === generation.current) setLoading(false); }
-  }, [date]);
+  }, [date, timeZone]);
   const loadCatalog = useCallback(async () => {
     const request = ++catalogGeneration.current;
     setCatalogLoading(true);
@@ -57,17 +57,17 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
     setRows([]); setNotice(''); setSaveError(null); void load();
     const refresh = () => {
       if (document.hidden) return;
-      const clock = new Date(), today = localDateValue(clock); setNow(clock);
-      if (todayRef.current !== today) {
-        const previousToday = todayRef.current; todayRef.current = today;
-        if (dateRef.current === previousToday && !selectedRef.current) { setDate(today); return; }
-      }
+      setNow(new Date());
+      const currentZone = viewerTimeZone();
+      if (currentZone !== timeZone) { setTimeZone(currentZone); return; }
+      // The selected calendar day is user state: a refresh, even across
+      // midnight or a timezone preference change, must never advance it.
       void load(true);
     };
     const timer = setInterval(refresh, 30_000);
     window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh);
     return () => { clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); ++generation.current; };
-  }, [load]);
+  }, [load, timeZone]);
 
   async function save(appointment: WorkspaceAppointment, value: string) {
     if (savingRef.current) return;
@@ -95,12 +95,12 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
     }
   }
 
-  const today = localDateValue(now);
-  const heading = new Date(`${date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' });
+  const today = localDateValue(now, timeZone);
+  const heading = new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', weekday: 'short' });
   const selectedAppointment = selected ? rows.find(row => row.id === selected.id && linkedAppointmentContact(row) === selected.contactId) ?? null : null;
   const refresh = () => { setNow(new Date()); void load(true); void loadCatalog(); };
   return {
-    date, today, heading, rows, selectedAppointment, now, loading, loadError, catalog, catalogLoading,
+    date, today, heading, rows, selectedAppointment, now, timeZone, loading, loadError, catalog, catalogLoading,
     catalogError, saving, saveError, notice, noticeKey, setDate, refresh, retryLoad: () => void load(),
     retryCatalog: () => void loadCatalog(), saveDisposition: save,
   };
@@ -108,17 +108,19 @@ export function useWorkspaceAppointments(selected: AppointmentSelection | null) 
 
 export type WorkspaceAppointmentsModel = ReturnType<typeof useWorkspaceAppointments>;
 
-export function WorkspaceAppointments({ model, selecting, onSelect }: {
+export function WorkspaceAppointments({ model, selecting, onSelect, searchControl }: {
   model: WorkspaceAppointmentsModel; selecting: boolean; onSelect: (appointment: WorkspaceAppointment) => void;
+  searchControl?: (heading: ReactNode) => ReactNode;
 }) {
-  const { date, today, heading, rows, selectedAppointment, now, loading, loadError, saving } = model;
+  const { date, today, heading, rows, selectedAppointment, now, timeZone, loading, loadError, saving } = model;
+  const title = <h2><CalendarDays size={17}/>{date === today ? 'Today’s appointments' : 'Appointments'}</h2>;
   return <section className="workspace-appointments" aria-label="Appointments">
-    <div className="appointments-heading"><h2><CalendarDays size={15}/>{date === today ? 'Today’s appointments' : 'Appointments'}</h2><button className="icon-button" disabled={Boolean(saving) || loading} aria-label="Refresh appointments" onClick={model.refresh}><RefreshCw size={15}/></button></div>
+    <div className="appointments-heading">{searchControl ? searchControl(title) : title}</div>
     <div className="appointments-date">
       <button className="icon-button" disabled={Boolean(saving)} aria-label="Previous day" onClick={() => model.setDate(shiftAppointmentDate(date, -1))}><ChevronLeft size={17}/></button>
-      <label><span>{heading}</span><input type="date" aria-label="Appointment date" value={date} disabled={Boolean(saving)} onChange={event => { if (event.target.value && /^\d{4}-\d{2}-\d{2}$/.test(event.target.value)) model.setDate(event.target.value); }}/></label>
+      <MissionDateInput date={date} today={today} label={heading} disabled={Boolean(saving)} onChange={model.setDate}/>
       <button className="icon-button" disabled={Boolean(saving)} aria-label="Next day" onClick={() => model.setDate(shiftAppointmentDate(date, 1))}><ChevronRight size={17}/></button>
-      <button className="appointments-today" disabled={Boolean(saving) || date === today} onClick={() => model.setDate(localDateValue(new Date()))}>Today</button>
+      <button className="appointments-today" disabled={Boolean(saving) || date === today} onClick={() => model.setDate(localDateValue(new Date(), timeZone))}>Today</button>
     </div>
     {loading && <p className="notes-muted" role="status">Loading appointments…</p>}
     {loadError && <p className="assistant-error" role="alert">{loadError} <button onClick={model.retryLoad}>Retry</button></p>}
@@ -127,11 +129,12 @@ export function WorkspaceAppointments({ model, selecting, onSelect }: {
       {rows.map(appointment => {
         const key = appointmentKey(appointment), contactId = linkedAppointmentContact(appointment), name = appointmentName(appointment);
         const selectedRow = selectedAppointment === appointment;
-        const time = appointmentTimeSlot(appointment), badge = appointmentStatusBadge(appointment, now, !loadError);
+        const time = appointmentTimeSlot(appointment, timeZone), status = appointmentStatusBadge(appointment, now, !loadError, timeZone);
+        const showStatus = ['no-show', 'needed', 'client'].includes(status.tone);
         return <article className={`appointment-mini${selectedRow ? ' selected' : ''}`} key={key} data-appointment-id={appointment.id}>
-          <button className="appointment-select" disabled={!contactId || selecting} aria-pressed={selectedRow} onClick={() => onSelect(appointment)} aria-label={`Open notes for ${name}, ${time}`} title={!contactId ? 'No linked contact. Search for a contact to open their notes.' : undefined}>
+          <button className="appointment-select" disabled={!contactId || selecting} aria-pressed={selectedRow} onClick={() => onSelect(appointment)} aria-label={`Open notes for ${name}, ${time}${showStatus ? `, ${status.text}` : ''}`} title={!contactId ? 'No linked contact. Search for a contact to open their notes.' : undefined}>
+            {showStatus && <span className={`appointment-status-tab ${status.tone}`} title={status.text} aria-label={status.text}/>}
             <span className="appointment-summary"><time dateTime={appointment.scheduled_at}>{time}</time><strong>{name}</strong></span>
-            <span className={`appointment-status ${badge.tone}`}>{badge.text}</span>
             <ChevronRight className="appointment-chevron" size={16} aria-hidden="true"/>
           </button>
         </article>;

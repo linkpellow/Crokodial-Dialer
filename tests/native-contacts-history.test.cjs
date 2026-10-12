@@ -44,7 +44,7 @@ export class DialerEngine {
 
 // Runs inside the isolated fixture main process and only answers local test data.
 function installFixture(ipcMain) {
-  global.fixture = { requests: [], failContacts: false, failHistory: false, prependHistory: false, holdContacts: false, pendingContacts: [], notes: {}, revisions: {} };
+  global.fixture = { requests: [], failContacts: false, failHistory: false, prependHistory: false, holdContacts: false, pendingContacts: [], notes: {}, revisions: {}, contactVersions: {}, contactIndicators: {}, extraContact: false, extraContactCount: 0, deletedContactIds: [] };
   const reply = (data, status = 200) => ({ ok: status < 400, status, statusText: 'Fixture', headers: { 'content-type': 'application/json' }, body: JSON.stringify(status < 400 ? { success: true, data } : { success: false, error: { message: data } }) });
   const contact = id => ({ id, firstName: 'Fixture', lastName: String(id).padStart(3, '0'), e164: '+1212555' + String(id).padStart(4, '0'), last_call_disposition: null, client_status: id % 2 === 0 ? 'active' : null, call_notes: global.fixture.notes[id] || `Canonical note for ${id}.`, notes_revision: global.fixture.revisions[id] || 0 });
   ipcMain.handle('api-fetch', async (_, payload) => {
@@ -63,8 +63,11 @@ function installFixture(ipcMain) {
       const limit = Number(q.get('limit') || 50), offset = Number((q.get('cursor') || '').split('-').pop()) || 0, search = q.get('search') || '', filter = q.get('filter') || 'all';
       let contacts = Array.from({ length: 160 }, (_, index) => {
         const item = contact(index + 1);
-        return { id:item.id, name:item.firstName+' '+item.lastName, firstName:item.firstName, lastName:item.lastName, phone:item.e164, email:`fixture-${item.id}@example.test`, state:'FL', clientStatus:item.id%2===0?'client':null, disposition:null };
+        return { id:item.id, name:state.contactVersions[item.id] || item.firstName+' '+item.lastName, firstName:item.firstName, lastName:item.lastName, phone:item.e164, email:`fixture-${item.id}@example.test`, state:'FL', clientStatus:item.id%2===0?'client':null, disposition:null, hasAppointment:item.id%5===0, appointmentIndicator:state.contactIndicators[item.id] || (item.id%5===0?(item.id%3===0?'no_show':'follow_up_needed'):null) };
       });
+      if(state.extraContact) contacts.push({ ...contacts[0], id:161, name:'Fixture 161', phone:'+12125550161', clientStatus:null, hasAppointment:false, appointmentIndicator:null });
+      for(let i=0; i<state.extraContactCount; i++) { const id=162+i; contacts.push({ ...contacts[0], id, name:'Fixture '+id, phone:'+12125550'+id, clientStatus:null, hasAppointment:false, appointmentIndicator:null }); }
+      contacts = contacts.filter(item => !state.deletedContactIds.includes(item.id));
       contacts.sort((a,b) => b.id-a.id);
       if (filter === 'clients') contacts = contacts.filter(item => item.clientStatus === 'client');
       if (filter === 'leads') contacts = contacts.filter(item => item.clientStatus === null);
@@ -143,7 +146,19 @@ function installFixture(ipcMain) {
     await contactRows.first().waitFor();
     await eventually(async () => await contactRows.count() === 50, 'Contacts must use the first canonical cursor page');
     assert.deepEqual(await contactRows.evaluateAll(items=>items.map(item=>Number(item.dataset.contactId))), Array.from({length:50},(_,index)=>160-index), 'Contacts fixture follows canonical ID-descending keyset order');
+    assert.equal(await search.isVisible(), false, 'Search field starts collapsed');
+    assert.equal(await contacts.getByRole('button', { name: 'Refresh contacts', exact: true }).count(), 0);
+    assert.equal(await contacts.locator('.workspace-contact-badge').count(), 0, 'Text badges must be replaced by subtle strips');
+    assert.equal(await contacts.locator('[data-contact-id="159"] .workspace-contact-indicator').count(), 0, 'A lead with no appointment has no status tab');
+    assert.equal(await contacts.locator('[data-contact-id="160"] .workspace-contact-indicator.client').count(), 1);
+    assert.equal(await contacts.locator('[data-contact-id="155"] .workspace-contact-indicator.follow-up').count(), 1);
+    assert.equal(await contacts.locator('[data-contact-id="135"] .workspace-contact-indicator.no-show').count(), 1);
+    await contacts.getByRole('button', { name: 'Search', exact: true }).click();
+    await search.waitFor({ state: 'visible' });
+    assert.equal(await search.evaluate(element => document.activeElement === element), true, 'Expanded search receives keyboard focus');
     assert.equal(await search.getAttribute('placeholder'), 'Name or phone');
+    await search.press('Escape');
+    await search.waitFor({ state: 'hidden' });
     assert.equal(await contactRows.first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'Fixture must include production Tailwind preflight instead of native button backgrounds');
     await contactFilters.getByRole('tab', { name: 'Clients', exact: true }).click();
     await eventually(async () => (await contactRows.first().getAttribute('data-contact-id')) === '160', 'Client filter must refresh the list');
@@ -151,6 +166,7 @@ function installFixture(ipcMain) {
     await contactFilters.getByRole('tab', { name: 'Leads', exact: true }).click();
     await eventually(async () => (await contactRows.first().getAttribute('data-contact-id')) === '159', 'Lead filter must reset its cursor');
     assert.ok((await contactRows.evaluateAll(items => items.map(item => Number(item.dataset.contactId)))).every(id => id % 2 === 1));
+    await contacts.getByRole('button', { name: 'Search', exact: true }).click();
     await search.fill('Fi');
     await eventually(() => app.evaluate(() => global.fixture.requests.some(item => item.path === '/api/contacts/workspace' && item.query.search === 'Fi')), 'Short search must reach the canonical workspace endpoint');
     await search.fill('Fixture');
@@ -170,6 +186,34 @@ function installFixture(ipcMain) {
     assert.ok(contactScroll > 0);
     fs.mkdirSync('artifacts/native-contacts-history', { recursive: true });
     await page.screenshot({ path: 'artifacts/native-contacts-history/contacts.png' });
+    // Automatic focus/visibility refresh keeps loaded pages and the visible anchor.
+    await app.evaluate(() => { global.fixture.extraContact = true; global.fixture.contactVersions[160] = 'Fixture Updated 160'; global.fixture.contactVersions[85] = 'Fixture Updated 085'; global.fixture.contactIndicators[85] = 'no_show'; });
+    const refreshCount = await app.evaluate(() => global.fixture.requests.filter(item => item.path === '/api/contacts/workspace').length);
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); window.dispatchEvent(new Event('focus')); });
+    await eventually(async () => await contactRows.first().getAttribute('data-contact-id') === '161', 'Focus automatically discovers a new contact');
+    assert.match(await contacts.locator('[data-contact-id="160"]').innerText(), /Updated 160/);
+    assert.match(await contacts.locator('[data-contact-id="85"]').innerText(), /Updated 085/, 'Automatic refresh includes older loaded cursor pages');
+    assert.equal(await contacts.locator('[data-contact-id="85"] .workspace-contact-indicator.no-show').count(), 1, 'Older loaded contact status changes automatically');
+    assert.ok(await contactRows.count() >= 101, 'Automatic refresh preserves loaded older pages');
+    assert.equal(await search.inputValue(), 'Fixture');
+    let refreshedContactScroll = await contactList.evaluate(element => element.scrollTop);
+    assert.ok(refreshedContactScroll >= contactScroll, 'New head does not jump to the start');
+    const originalOffset = (await chosen.boundingBox()).y - (await contactList.boundingBox()).y;
+    await app.evaluate(() => { global.fixture.extraContactCount = 60; global.fixture.deletedContactIds = [160]; });
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await eventually(async () => await contactRows.first().getAttribute('data-contact-id') === '221', 'A non-overlapping fresh head reconciles through the existing loaded window');
+    assert.equal(await contacts.locator('[data-contact-id="160"]').count(), 0, 'Deleted contacts disappear on automatic refresh');
+    assert.ok(await chosen.count() === 1, 'Older selected contact remains present across non-overlap');
+    assert.ok(Math.abs((await chosen.boundingBox()).y - (await contactList.boundingBox()).y - originalOffset) <= 1, 'New and deleted rows preserve the exact visible contact anchor');
+    refreshedContactScroll = await contactList.evaluate(element => element.scrollTop);
+    // Visibility and focus cannot create concurrent duplicate list requests.
+    await app.evaluate(() => { global.fixture.holdContacts = true; });
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus')); });
+    await eventually(() => app.evaluate(() => global.fixture.pendingContacts.length === 1), 'Repeated events share one in-flight refresh');
+    assert.equal(await app.evaluate(() => global.fixture.pendingContacts.length), 1);
+    await app.evaluate(() => { global.fixture.holdContacts = false; global.fixture.pendingContacts.pop()(); });
+    await eventually(async () => (await app.evaluate(() => global.fixture.requests.filter(item => item.path === '/api/contacts/workspace').length)) > refreshCount, 'Automatic refresh issued a scoped request');
+    await eventually(async () => await contacts.getAttribute('aria-busy') === 'false', 'Background contact refresh completes before selecting');
     await chosen.click();
     const notes = page.locator('#contact-notes');
     await page.waitForFunction(() => document.querySelector('#contact-notes')?.value === 'Canonical note for 85.');
@@ -183,7 +227,7 @@ function installFixture(ipcMain) {
     assert.equal(await search.inputValue(), 'Fixture');
     assert.equal(await contactFilters.getByRole('tab', { name: 'All', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await contactList.getAttribute('data-fixture-preserved'), 'yes');
-    assert.ok(Math.abs((await contactList.evaluate(element => element.scrollTop)) - contactScroll) <= 1, 'Back must retain the contact scroll position');
+    assert.ok(Math.abs((await contactList.evaluate(element => element.scrollTop)) - refreshedContactScroll) <= 1, 'Back must retain the contact scroll position');
     assert.ok(await contactRows.count() >= 100, 'Back must retain the loaded cursor pages');
     await eventually(async () => (await app.evaluate(() => global.fixture.notes[85])) === noteText, 'Back must autosave only the selected contact');
     await chosen.click();
@@ -194,6 +238,7 @@ function installFixture(ipcMain) {
     const history = page.locator('.contact-history'), historyList = history.locator('.contact-history-list');
     const events = history.locator('[data-history-id]'), historyFilters = page.getByRole('tablist', { name: 'History type', exact: true });
     await events.first().waitFor();
+    assert.equal(await history.getByRole('button', { name: 'Refresh history', exact: true }).count(), 0);
     assert.equal(await events.first().getAttribute('data-history-id'), 'appointment:0');
     await history.getByText('Today', { exact: true }).waitFor();
     await history.getByText('Yesterday', { exact: true }).waitFor();
@@ -282,11 +327,13 @@ function installFixture(ipcMain) {
     assert.ok((await app.evaluate(() => global.fixture.requests.filter(item=>item.path==='/api/contacts/workspace/84/activity'))).length >= 2);
     await page.getByRole('button', { name: 'Back to notes', exact: true }).click();
     await page.getByRole('button', { name: 'Back to contacts', exact: true }).click();
+    await eventually(async () => await contacts.getAttribute('aria-busy') === 'false', 'Return refresh settles before testing failure');
     await app.evaluate(() => { global.fixture.failContacts = true; });
-    await page.getByRole('button', { name: 'Refresh contacts', exact: true }).click();
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); });
     await contacts.getByRole('alert').filter({hasText:'Fixture contacts unavailable.'}).waitFor();
     await app.evaluate(() => { global.fixture.failContacts = false; });
-    await contacts.getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await eventually(async () => await contacts.getByRole('alert').count() === 0, 'Automatic refresh recovers from a transient list error');
     await contactRows.first().waitFor();
     // Delayed old search cannot replace a newer filter response.
     await app.evaluate(() => { global.fixture.holdContacts = true; });

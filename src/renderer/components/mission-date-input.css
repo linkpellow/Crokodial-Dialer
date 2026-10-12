@@ -1,0 +1,23 @@
+/* Visual tokens ported from the web dialer's MissionDateRangeInput. */
+.mission-date-input { flex: 1; min-width: 0; }
+.mission-date-trigger { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 30px; padding: 5px 0; color: #fff; font-size: 12px; font-weight: 600; border-radius: 6px; -webkit-app-region: no-drag; }
+.mission-date-trigger svg { color: #a3e635; transition: transform 150ms; }
+.mission-date-trigger svg.open { transform: rotate(180deg); }
+.mission-date-calendar { position: fixed; z-index: 250; box-sizing: border-box; overflow-y: auto; border-radius: 12px; border: 1px solid #ffffff1a; background: #111827; box-shadow: 0 25px 50px -12px #00000080; padding: 16px; color: #fff; -webkit-app-region: no-drag; }
+.mission-calendar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.mission-calendar-heading span { font-size: 14px; font-weight: 500; }
+.mission-calendar-heading button { display: flex; padding: 6px; border-radius: 4px; color: #ffffffb3; transition: background-color 150ms, color 150ms; }
+.mission-calendar-heading button:hover { background: #ffffff1a; color: white; }
+.mission-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; margin-bottom: 12px; }
+.mission-calendar-weekday { text-align: center; padding: 4px 0; font-size: 12px; font-weight: 500; color: #ffffff99; }
+.mission-date-calendar .mission-calendar-day { width: 100%; height: 40px; border-radius: 4px; font-size: 14px; color: #fff; background: transparent; transition: background-color 150ms, color 150ms; }
+.mission-date-calendar .mission-calendar-day.outside-month { color: #ffffff66; }
+.mission-date-calendar .mission-calendar-day:hover { background: #ffffff1a; }
+.mission-date-calendar .mission-calendar-day.outside-month:hover { background: #ffffff0d; }
+.mission-date-calendar .mission-calendar-day.today:not(.selected) { box-shadow: 0 0 0 1px #ffffff4d; background: #ffffff0d; }
+.mission-date-calendar .mission-calendar-day.selected { background: #84cc1666; color: #fff; box-shadow: 0 0 0 1px #a3e63580; }
+.mission-calendar-footer { display: flex; justify-content: center; padding-top: 8px; border-top: 1px solid #ffffff1a; }
+.mission-calendar-footer button { color: #a3e635; font-size: 12px; padding: 4px 12px; }
+.mission-calendar-footer button:hover { color: #bef264; }
+.mission-date-trigger:focus-visible, .mission-date-calendar button:focus-visible { outline: 2px solid #a3e635; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .mission-date-trigger svg, .mission-date-calendar button { transition: none; } }

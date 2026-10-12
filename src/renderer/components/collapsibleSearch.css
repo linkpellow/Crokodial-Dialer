@@ -1,0 +1,13 @@
+.workspace-search-disclosure { min-width: 0; flex-shrink: 0; }
+.workspace-search-toolbar { display: flex; align-items: center; gap: 9px; min-height: 30px; }
+.workspace-search-heading { flex: 1; min-width: 0; }
+.workspace-search-trigger { margin-left: auto; color: #c9d8c2; width: 29px; height: 29px; }
+.workspace-search-trigger[aria-expanded=true] { color: #d7edb5; background: #a8e0630c; }
+.workspace-search-reveal { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 180ms ease, opacity 140ms ease, visibility 0s 180ms; }
+.workspace-search-disclosure[data-expanded=true] .workspace-search-reveal { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.workspace-search-reveal-inner { min-height: 0; overflow: hidden; }
+.workspace-search-field { display: flex; align-items: center; gap: 7px; margin-top: 8px; border: 1px solid #a8e06340; border-radius: 7px; background: #ffffff04; padding: 0 9px; color: #aabea0; -webkit-app-region: no-drag; }
+.workspace-search-field:focus-within { border-color: #b5e17a99; }
+.notes-workspace .workspace-search-field input[type=search] { flex: 1; min-width: 0; width: 100%; border: 0; border-radius: 0; background: transparent; padding: 8px 0; font-size: 12px; box-shadow: none; outline: none; }
+.workspace-search-field input::-webkit-search-cancel-button { display: none; }
+@media (prefers-reduced-motion: reduce) { .workspace-search-reveal { transition: none; } }

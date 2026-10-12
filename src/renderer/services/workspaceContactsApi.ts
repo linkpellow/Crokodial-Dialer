@@ -13,6 +13,9 @@ export interface WorkspaceContact {
   state: string | null;
   clientStatus: 'client' | 'former_client' | null;
   disposition: string | null;
+  /** Optional while older platform releases are still serving contact pages. */
+  hasAppointment?: boolean;
+  appointmentIndicator?: 'no_show' | 'follow_up_needed' | 'client' | null;
 }
 export interface WorkspaceContactUpdate { id: number; clientStatus: 'client' | 'former_client' | null; disposition: string | null }
 export interface CursorPage { hasMore: boolean; nextCursor: string | null }
@@ -51,8 +54,8 @@ export const workspaceContactsApi = {
     const params = query(filter, cursor, limit);
     if (search.trim()) params.set('search', search.trim());
     const page = await request<WorkspaceContactPage>(`/api/contacts/workspace?${params}`);
-    if (!validPage(page) || !Array.isArray(page.contacts) || page.contacts.some(contact => !contact || !Number.isSafeInteger(contact.id) || contact.id <= 0 || typeof contact.name !== 'string' || (contact.phone !== null && typeof contact.phone !== 'string') || ![null, 'client', 'former_client'].includes(contact.clientStatus))) throw new Error('Unable to read the contact list. Please retry.');
-    if (cursor && page.hasMore && cursor === page.nextCursor) throw new Error('The contact list could not advance. Refresh to continue.');
+    if (!validPage(page) || !Array.isArray(page.contacts) || page.contacts.some(contact => !contact || !Number.isSafeInteger(contact.id) || contact.id <= 0 || typeof contact.name !== 'string' || (contact.phone !== null && typeof contact.phone !== 'string') || ![null, 'client', 'former_client'].includes(contact.clientStatus) || (contact.hasAppointment !== undefined && typeof contact.hasAppointment !== 'boolean') || (contact.appointmentIndicator !== undefined && ![null, 'no_show', 'follow_up_needed', 'client'].includes(contact.appointmentIndicator)))) throw new Error('Unable to read the contact list. Please retry.');
+    if (cursor && page.hasMore && cursor === page.nextCursor) throw new Error('The contact list could not advance. Please retry.');
     return page;
   },
   async history(contactId: number, { filter = 'all', cursor, limit = 50 }: {
@@ -61,7 +64,7 @@ export const workspaceContactsApi = {
     if (!Number.isSafeInteger(contactId) || contactId <= 0) throw new Error('Choose a valid contact to view history.');
     const page = await request<ContactActivityPage>(`/api/contacts/workspace/${contactId}/activity?${query(filter, cursor, limit)}`);
     if (!page || page.contactId !== contactId || !validPage(page) || !Array.isArray(page.items) || page.items.some(item => !item || typeof item.id !== 'string' || typeof item.status !== 'string' || !['call', 'appointment'].includes(item.kind) || !Number.isFinite(Date.parse(item.occurredAt)) || (item.kind === 'call' ? ![null, 'inbound', 'outbound'].includes(item.direction) || (item.outcome !== null && typeof item.outcome !== 'string') || (item.durationSeconds !== null && !Number.isFinite(item.durationSeconds)) || typeof item.verified !== 'boolean' : typeof item.title !== 'string' || !Number.isFinite(Date.parse(item.scheduledAt)) || (item.durationMinutes !== null && !Number.isFinite(item.durationMinutes))))) throw new Error('Unable to verify this contact’s history. Please retry.');
-    if (cursor && page.hasMore && cursor === page.nextCursor) throw new Error('The history could not advance. Refresh to continue.');
+    if (cursor && page.hasMore && cursor === page.nextCursor) throw new Error('The history could not advance. Please retry.');
     return page;
   },
 };
@@ -75,6 +78,16 @@ export function workspaceContactPhone(phone: string | null): string {
   const digits = phone.replace(/\D/g, '');
   const national = digits.length === 11 && digits[0] === '1' ? digits.slice(1) : digits;
   return national.length === 10 ? `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}` : phone;
+}
+/** Never infer an appointment outcome from a lead's call disposition alone. */
+export function workspaceContactIndicator(contact: WorkspaceContact): { tone: 'client' | 'follow-up' | 'no-show'; label: string } | null {
+  const disposition = contact.disposition?.trim().replace(/[_-]+/g, ' ').toLowerCase();
+  if (contact.clientStatus === 'client' || disposition === 'closed') return { tone: 'client', label: contact.clientStatus === 'client' ? 'Client' : 'Closed' };
+  if (contact.hasAppointment !== true) return null;
+  if (contact.appointmentIndicator === 'no_show') return { tone: 'no-show', label: 'No show' };
+  if (contact.appointmentIndicator === 'follow_up_needed') return { tone: 'follow-up', label: 'Follow-up needed' };
+  if (contact.appointmentIndicator === 'client') return { tone: 'client', label: 'Client' };
+  return null;
 }
 export function activityTime(value: string): string {
   const date = new Date(value);
@@ -95,10 +108,11 @@ export function activitySlot(activity: ContactAppointmentActivity): string {
 export function activityDateHeading(value: string, now = new Date()): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 'Date unavailable';
-  const key = localDateValue(date), yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
-  if (key === localDateValue(now)) return 'Today';
-  if (key === localDateValue(yesterday)) return 'Yesterday';
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' as const } : {}) });
+  const timeZone = viewerTimeZone(), key = localDateValue(date, timeZone), today = localDateValue(now, timeZone);
+  const previousDay = new Date(`${today}T12:00:00Z`); previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+  if (key === today) return 'Today';
+  if (key === previousDay.toISOString().slice(0, 10)) return 'Yesterday';
+  return date.toLocaleDateString('en-US', { timeZone, month: 'short', day: 'numeric', ...(key.slice(0, 4) !== today.slice(0, 4) ? { year: 'numeric' as const } : {}) });
 }
 /** Keep stable row identity while cursors overlap after concurrent catalog updates. */
 export function mergeWorkspaceRows<T extends { id: string | number }>(previous: T[], next: T[]): T[] {

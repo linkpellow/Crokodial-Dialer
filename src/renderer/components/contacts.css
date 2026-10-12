@@ -1,15 +1,15 @@
 .workspace-contacts, .contact-history { display: flex; flex-direction: column; flex: 1; min-height: 0; color: #e7f1e1; overflow: hidden; }
 .workspace-contacts { height: 100%; padding: 10px; background: radial-gradient(ellipse at 90% 0, #34512555, transparent 48%), #10291a; }
-.workspace-contact-search { flex-shrink: 0; -webkit-app-region: drag; }
-.workspace-contact-search-heading, .contact-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
-.workspace-contact-search label, .contact-history-heading h2 { font-size: 12px; font-weight: 500; margin: 0; }
-.workspace-contact-search input { width: 100%; background: #ffffff04; border: 1px solid #a8e06340; border-radius: 6px; padding: 8px 10px; color: #eef7e8; font-size: 12px; -webkit-app-region: no-drag; }
-.workspace-contact-search input::placeholder { color: #a5b6a0; }
+.workspace-contact-toolbar { flex-shrink: 0; padding-bottom: 9px; border-bottom: 1px solid #ffffff0c; -webkit-app-region: drag; }
+.workspace-contact-toolbar .workspace-list-filters { flex: 1; border-bottom: 0; padding: 0; }
+.workspace-contact-toolbar .workspace-search-disclosure { width: 100%; }
+.contact-history-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.contact-history-heading h2 { font-size: 12px; font-weight: 500; margin: 0; }
 .workspace-list-filters { display: flex; flex-shrink: 0; gap: 6px; padding: 10px 0 9px; border-bottom: 1px solid #ffffff0c; }
 .workspace-list-filters button { flex: 1; min-width: 0; border: 1px solid #a8e06328; border-radius: 7px; padding: 6px 4px; font-size: 11px; color: #d8e5ce; background: #091f13aa; -webkit-app-region: no-drag; }
 .workspace-list-filters button[aria-selected=true] { border-color: #9bd23185; color: #d2f278; background: #66871925; }
 .workspace-contacts-list, .contact-history-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #476044 transparent; }
-.workspace-contact-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 61px; padding: 8px 2px; border-bottom: 1px solid #ffffff12; text-align: left; color: inherit; -webkit-app-region: no-drag; }
+.workspace-contact-row { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 61px; padding: 8px 2px 8px 9px; border-bottom: 1px solid #ffffff12; text-align: left; color: inherit; -webkit-app-region: no-drag; }
 .workspace-contact-row.selected { background: #99d95e0c; }
 .workspace-contact-row:hover { background: #99d95e0a; }
 .workspace-contact-row:disabled { opacity: .6; }
@@ -17,8 +17,9 @@
 .workspace-contact-summary { flex: 1; min-width: 0; }
 .workspace-contact-summary strong { display: block; font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .workspace-contact-summary small { display: block; margin-top: 3px; color: #b6c8ae; font-size: 10px; font-variant-numeric: tabular-nums; }
-.workspace-contact-badge { flex: 0 1 auto; max-width: 25%; padding: 3px 7px; font-size: 10px; line-height: 1.2; border-radius: 999px; border: 1px solid #bd912466; color: #eed582; background: #9e6b0822; text-align: center; }
-.workspace-contact-badge.client { border-color: #85b83866; color: #c7f372; background: #61961522; }
+.workspace-contact-indicator { position: absolute; left: 0; top: 17px; bottom: 17px; width: 3px; border-radius: 2px; background: #60be55; }
+.workspace-contact-indicator.follow-up { background: #e9bd32; }
+.workspace-contact-indicator.no-show { background: #ef655d; }
 .workspace-contact-chevron { flex-shrink: 0; color: #d0deca; }
 .workspace-list-message { margin: 10px 2px; font-size: 11px; line-height: 1.5; color: #b7c8ae; }
 .workspace-list-error { flex-shrink: 0; margin: 8px 2px; font-size: 11px; line-height: 1.5; color: #efc19a; }
@@ -44,4 +45,4 @@
 .contact-history-event-toggle svg.expanded { transform: rotate(90deg); }
 .contact-history-event-detail { font-size: 10px; line-height: 1.5; color: #afc4a4; padding: 0 0 8px; }
 .contact-history-event-detail p { margin-top: 3px; }
-.workspace-contacts button:focus-visible, .workspace-contact-search input:focus-visible, .workspace-contacts-list:focus-visible, .contact-history button:focus-visible, .contact-history-list:focus-visible { outline: 1px solid #b2ee65; outline-offset: -2px; }
+.workspace-contacts button:focus-visible, .workspace-contacts-list:focus-visible, .contact-history button:focus-visible, .contact-history-list:focus-visible { outline: 1px solid #b2ee65; outline-offset: -2px; }

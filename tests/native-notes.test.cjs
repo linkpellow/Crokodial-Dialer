@@ -126,7 +126,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     // Persisted needs-review jobs remain recoverable independently of the capture controller.
     await app.evaluate(()=>{const session=Object.values(global.sessions)[0];session.status='needs_review';session.retryable=true;session.segments[0].status='needs_review';session.segments[0].retryable=true;});
     await openRecordingDetails();
-    await page.getByRole('button',{name:'Refresh contact notes',exact:true}).click();
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});window.dispatchEvent(new Event('focus'));delete document.hidden;});
     await page.locator('.notes-history').filter({hasText:'needs review'}).click();
     await page.getByRole('button',{name:'Retry part 1',exact:true}).click();
     await page.getByRole('button',{name:'Retry final notes',exact:true}).click();

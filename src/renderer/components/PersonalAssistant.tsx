@@ -22,6 +22,7 @@ export function PersonalAssistant({ active, callActive, callLabel, onReturnToCal
   const [setupError, setSetupError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const loaded = useRef(false);
+  const loadPending = useRef(false);
   const alive = useRef(true);
   const session = useRef<{ agentId: number; id: string }>();
   const localConversationId = useRef(crypto.randomUUID());
@@ -41,17 +42,28 @@ export function PersonalAssistant({ active, callActive, callLabel, onReturnToCal
       void window.dialer?.clearAssistant?.().catch(() => {});
     };
   }, []);
-  async function load() {
-    setLoading(true); setSetupError(undefined);
+  async function load(silent = false) {
+    if (loadPending.current || (silent && busy.current)) return;
+    loadPending.current = true;
+    if (!silent) { setLoading(true); setSetupError(undefined); }
     const results = await Promise.allSettled([listPersonalAssistants(), listInsurancePlans()]);
+    loadPending.current = false;
     if (!alive.current) return;
-    if (results[0].status === 'fulfilled') setAgents(results[0].value);
+    if (results[0].status === 'fulfilled') { setAgents(results[0].value); setSetupError(undefined); }
     else setSetupError(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load assistant settings.');
     if (results[1].status === 'fulfilled') { setPlans(results[1].value); setNotice(undefined); }
     else setNotice('Plan configuration is unavailable. Plan research may require a retry.');
     setLoading(false);
   }
-  useEffect(() => { if (active && !loaded.current) { loaded.current = true; void load(); } if (active) input.current?.focus(); }, [active]);
+  useEffect(() => {
+    if (!active) return;
+    if (!loaded.current) { loaded.current = true; void load(); } else void load(true);
+    input.current?.focus();
+    const refresh = () => { if (!document.hidden) void load(true); };
+    const timer = setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [active]);
   useEffect(() => { if (active) bottom.current?.scrollIntoView({ behavior: 'instant' }); }, [conversation.turns.length, conversation.busy, active]);
 
   async function platformReply(text: string, history: Turn[]) {
@@ -128,7 +140,7 @@ export function PersonalAssistant({ active, callActive, callLabel, onReturnToCal
     <div className="assistant-transcript" role="log" aria-label="Assistant conversation" aria-live="polite">
       {loading && <p className="assistant-muted"><Loader2 className="spin" size={14}/> Loading your workspace…</p>}
       {setupError && <div className="assistant-error" role="alert">{setupError}<button onClick={() => void load()}>Retry</button></div>}
-      {!loading && !setupError && !agents.length && <div className="assistant-empty"><p>Create a Personal Assistant in Crokodial to use your shared instructions, tools, and knowledge here.</p><button onClick={() => void open('/ai-assistants')}>Open AI settings <ExternalLink size={12}/></button><button onClick={() => void load()}>Refresh</button></div>}
+      {!loading && !setupError && !agents.length && <div className="assistant-empty"><p>Create a Personal Assistant in Crokodial to use your shared instructions, tools, and knowledge here.</p><button onClick={() => void open('/ai-assistants')}>Open AI settings <ExternalLink size={12}/></button></div>}
       {conversation.turns.map(turn => <article key={turn.id} className={`assistant-turn ${turn.role}`}><small>{turn.role === 'user' ? 'YOU' : 'ASSISTANT'}</small><div className="assistant-answer">{answerParts(turn.text, id => void brochure(id))}</div>{Boolean(turn.sources?.length) && <details><summary>Sources ({turn.sources!.length})</summary>{turn.sources!.map((source, index) => <p key={index}>{source}</p>)}</details>}{Boolean(turn.actions?.length) && <p className="assistant-action-note">Suggested only: {turn.actions!.join(', ')}. No action was sent.</p>}</article>)}
       {conversation.busy && <div className="assistant-thinking" role="status"><Loader2 className="spin" size={14}/> {conversation.resetting ? 'Clearing conversation…' : 'Researching your request…'}</div>}
       {conversation.error && <div className="assistant-error" role="alert">{conversation.error}</div>}

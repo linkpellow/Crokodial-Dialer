@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { CalendarDays, ChevronRight, PhoneIncoming, PhoneOutgoing, Phone, RefreshCw } from 'lucide-react';
+import { CalendarDays, ChevronRight, PhoneIncoming, PhoneOutgoing, Phone } from 'lucide-react';
 import { workspaceContactsApi, activityDateHeading, activityDuration, activitySlot, activityStatus, activityTime, mergeWorkspaceRows, type ContactActivity, type ContactHistoryFilter } from '../services/workspaceContactsApi';
-import { localDateValue } from '../services/appointmentsApiService';
+import { localDateValue, viewerTimeZone } from '../services/appointmentsApiService';
 import './contacts.css';
 
 export function ContactHistory({ contactId, active = true, refreshKey = 0 }: { contactId: number; active?: boolean; refreshKey?: number | string }) {
   const [filter, setFilter] = useState<ContactHistoryFilter>('all'), [rows, setRows] = useState<ContactActivity[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null), [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false), [loaded, setLoaded] = useState(false), [error, setError] = useState('');
-  const [refresh, setRefresh] = useState(0), [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [dataKey, setDataKey] = useState('');
   const [backgroundLoading, setBackgroundLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null), sentinelRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0), busy = useRef(false), mounted = useRef(true), activeRef = useRef(active); activeRef.current = active;
-  const stateKey = `${contactId}\n${filter}\n${refresh}`, stateKeyRef = useRef(stateKey); stateKeyRef.current = stateKey;
+  const stateKey = `${contactId}\n${filter}`, stateKeyRef = useRef(stateKey); stateKeyRef.current = stateKey;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++generation.current; }; }, []);
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const scrollRestore = useRef<{ top: number; height: number } | null>(null);
@@ -66,15 +66,16 @@ export function ContactHistory({ contactId, active = true, refreshKey = 0 }: { c
     observer.observe(sentinelRef.current); return () => observer.disconnect();
   }, [active, hasMore, loadMore]);
   useEffect(() => {
-    if (!active || !loaded) return;
-    const refreshVisible = () => { if (!document.hidden) void load(null, true); };
+    if (!active) return;
+    const refreshVisible = () => { if (!document.hidden) void load(null, loaded); };
     const timer = setInterval(refreshVisible, 30_000);
     window.addEventListener('focus', refreshVisible);
-    return () => { clearInterval(timer); window.removeEventListener('focus', refreshVisible); };
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refreshVisible); document.removeEventListener('visibilitychange', refreshVisible); };
   }, [active, loaded, load]);
   const visibleRows = dataKey === stateKey ? rows : [];
-  return <section className="contact-history" aria-label="Contact history">
-    <div className="contact-history-heading"><h2>History</h2><button className="icon-button" aria-label="Refresh history" title="Refresh history" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14}/></button></div>
+  return <section className="contact-history" aria-label="Contact history" aria-busy={loading}>
+    <div className="contact-history-heading"><h2>History</h2></div>
     <div className="workspace-list-filters" role="tablist" aria-label="History type">{(['all', 'calls', 'appointments'] as const).map(value => <button key={value} role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div>
     <div className="contact-history-list" ref={scrollRef} aria-label="History timeline" tabIndex={0}>
       {visibleRows.map((item, index) => {
@@ -95,7 +96,7 @@ export function ContactHistory({ contactId, active = true, refreshKey = 0 }: { c
                 <span><strong>{title}</strong><small>{summary}</small></span><ChevronRight className={expanded === item.id ? 'expanded' : ''} size={15} aria-hidden="true"/>
               </button>
               {expanded === item.id && <div className="contact-history-event-detail">
-                <time dateTime={item.occurredAt}>{new Date(item.occurredAt).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' })}</time>
+                <time dateTime={item.occurredAt}>{new Date(item.occurredAt).toLocaleString('en-US', { timeZone: viewerTimeZone(), dateStyle: 'full', timeStyle: 'short' })}</time>
                 {item.kind === 'call' && item.disposition && <p>Disposition: {item.disposition}</p>}
                 <p>{item.kind === 'call' ? item.verified ? 'Confirmed call record' : 'Historical call record; provider confirmation is unavailable.' : `Appointment: ${activityStatus(item.status)}`}</p>
                 {item.kind === 'call' && !activityDuration(item.durationSeconds) && <p>Duration unavailable</p>}

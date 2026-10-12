@@ -6,7 +6,8 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-appointments-
 buildSync({ stdin: { contents: `export * from './src/renderer/services/appointmentsApiService'; export * from './src/shared/appointmentFollowUpStatus';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', outfile: path.join(directory, 'state.cjs'), define: { 'import.meta.env.VITE_API_BASE': '"https://fixture.invalid"' } });
 const api = require(path.join(directory, 'state.cjs'));
 process.on('exit', () => fs.rmSync(directory, { recursive: true, force: true }));
-global.localStorage = { getItem: () => null };
+let storedUser = null;
+global.localStorage = { getItem: key => key === 'crokodial_auth_user' && storedUser ? JSON.stringify(storedUser) : null };
 let requests = [], payload;
 global.fetch = async (url, options) => { requests.push({ url, options }); return new Response(JSON.stringify({ data: payload }), { status: 200, headers: { 'Content-Type': 'application/json' } }); };
 const appointment = (overrides = {}) => ({ id: 10, contact_id: 2, contact: { id: 2, firstName: 'Synthetic', lastName: 'Person' }, appointment_type: 'Consultation', status: 'scheduled', scheduled_at: '2026-10-12T13:00:00Z', duration: 30, follow_up_appointments: [], ...overrides });
@@ -83,4 +84,39 @@ test('search-only disposition uses its existing contact binding without inventin
   await assert.rejects(api.appointmentsApi.saveContactDisposition(0, 'No Show'), /valid contact/);
   await assert.rejects(api.appointmentsApi.saveContactDisposition('2', 'No Show'), /valid contact/);
   assert.equal(requests.length, 1);
+});
+
+test('account timezone controls calendar day boundaries, labels and follow-up queries independently of the system timezone', async () => {
+  try {
+    storedUser = { id: 11, timezone: 'America/Los_Angeles' };
+    assert.equal(api.viewerTimeZone(), 'America/Los_Angeles');
+    assert.equal(api.localDateValue(new Date('2026-10-13T02:00:00Z')), '2026-10-12');
+    assert.equal(api.appointmentTimeSlot(appointment({ duration: 15 })), '6:00am - 6:15am');
+    requests = []; payload = [];
+    await api.appointmentsApi.list('2026-10-12');
+    const query = new URL(requests[0].url).searchParams;
+    assert.equal(query.get('viewerTimeZone'), 'America/Los_Angeles');
+    assert.equal(query.get('startDate'), '2026-10-12T07:00:00.000Z');
+    assert.equal(query.get('endDate'), '2026-10-13T06:59:59.999Z');
+    storedUser = { id: 11, timezone: 'not/a-zone' };
+    assert.equal(api.viewerTimeZone(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } finally { storedUser = null; }
+});
+test('configured-zone day boundaries cover spring/fall DST and fractional UTC offsets without losing appointments', () => {
+  const spring = api.appointmentDateRange('2026-03-08', 'America/New_York');
+  assert.equal(spring.start.toISOString(), '2026-03-08T05:00:00.000Z');
+  assert.equal(spring.end.toISOString(), '2026-03-09T03:59:59.999Z');
+  assert.equal(spring.end - spring.start + 1, 23 * 60 * 60 * 1000);
+  const fall = api.appointmentDateRange('2026-11-01', 'America/New_York');
+  assert.equal(fall.start.toISOString(), '2026-11-01T04:00:00.000Z');
+  assert.equal(fall.end.toISOString(), '2026-11-02T04:59:59.999Z');
+  assert.equal(fall.end - fall.start + 1, 25 * 60 * 60 * 1000);
+  assert.equal(api.appointmentDateRange('2026-10-12', 'Asia/Kathmandu').start.toISOString(), '2026-10-11T18:15:00.000Z');
+  assert.equal(api.shiftAppointmentDate('2026-12-31', 1), '2027-01-01');
+});
+test('explicit follow-up and closed outcomes receive rails, unrelated dispositions do not', () => {
+  const now = new Date('2026-10-12T12:00:00Z');
+  assert.equal(api.appointmentStatusBadge(appointment({ contact: { id: 2, last_call_disposition: 'Follow Up' } }), now).tone, 'needed');
+  assert.equal(api.appointmentStatusBadge(appointment({ contact: { id: 2, last_call_disposition: 'Closed', client_status: null } }), now).tone, 'client');
+  assert.equal(api.appointmentStatusBadge(appointment({ contact: { id: 2, last_call_disposition: 'Not interested' } }), now).tone, 'neutral');
 });

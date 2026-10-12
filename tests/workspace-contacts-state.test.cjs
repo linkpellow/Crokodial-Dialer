@@ -68,3 +68,33 @@ test('confirmed contact changes patch cached pages and honor membership filters 
   assert.deepEqual(api.patchWorkspaceContactRows([contact({ id: 3, clientStatus: 'client' }), contact({ id: 5, clientStatus: 'client' })], 'clients', { id: 3, clientStatus: 'former_client', disposition: null }).map(row => row.id), [5]);
   assert.equal(api.patchWorkspaceContactRows(rows, 'all', { ...closed, id: 999 }).length, 2);
 });
+
+
+test('contact color tabs require appointment evidence for leads and never invent a lead status', () => {
+  assert.equal(api.workspaceContactIndicator(contact()), null, 'older payloads have no guessed lead indicator');
+  assert.equal(api.workspaceContactIndicator(contact({ hasAppointment: false, disposition: 'No Show', appointmentIndicator: 'no_show' })), null);
+  assert.equal(api.workspaceContactIndicator(contact({ hasAppointment: false, disposition: 'Follow Up' })), null);
+  assert.deepEqual(api.workspaceContactIndicator(contact({ hasAppointment: true, appointmentIndicator: 'no_show' })), { tone: 'no-show', label: 'No show' });
+  assert.deepEqual(api.workspaceContactIndicator(contact({ hasAppointment: true, appointmentIndicator: 'follow_up_needed' })), { tone: 'follow-up', label: 'Follow-up needed' });
+  assert.deepEqual(api.workspaceContactIndicator(contact({ clientStatus: 'client', hasAppointment: false })), { tone: 'client', label: 'Client' });
+  assert.deepEqual(api.workspaceContactIndicator(contact({ disposition: 'Closed', hasAppointment: false })), { tone: 'client', label: 'Closed' });
+  assert.equal(api.workspaceContactIndicator(contact({ hasAppointment: true, appointmentIndicator: null })), null, 'future appointment alone has no status tab');
+});
+test('contact appointment evidence must be typed before rendering a status tab', async () => {
+  payload = { contacts: [contact({ hasAppointment: 'false' })], hasMore: false, nextCursor: null };
+  await assert.rejects(api.workspaceContactsApi.list(), /read the contact list/);
+  payload = { contacts: [contact({ appointmentIndicator: 'made_up' })], hasMore: false, nextCursor: null };
+  await assert.rejects(api.workspaceContactsApi.list(), /read the contact list/);
+  payload = { contacts: [contact({ hasAppointment: false, appointmentIndicator: null })], hasMore: false, nextCursor: null };
+  assert.equal((await api.workspaceContactsApi.list()).contacts[0].hasAppointment, false);
+});
+test('activity date grouping and time labels use the configured timezone across midnight and DST', () => {
+  const original = global.localStorage;
+  global.localStorage = { getItem: key => key === 'crokodial_auth_user' ? JSON.stringify({ timezone: 'America/Los_Angeles' }) : null };
+  try {
+    assert.equal(api.activityDateHeading('2026-10-12T02:00:00Z', new Date('2026-10-12T03:00:00Z')), 'Today');
+    assert.equal(api.activityDateHeading('2026-10-11T02:00:00Z', new Date('2026-10-12T03:00:00Z')), 'Yesterday');
+    assert.equal(api.activityTime('2026-10-12T02:00:00Z'), '7:00pm');
+    assert.equal(api.activityDateHeading('2026-11-01T18:00:00Z', new Date('2026-11-02T08:15:00Z')), 'Yesterday');
+  } finally { global.localStorage = original; }
+});

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronLeft, Mic, MoreHorizontal, Square, RefreshCw, History } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronLeft, Mic, MoreHorizontal, Square, History } from 'lucide-react';
+import { CollapsibleSearch } from './CollapsibleSearch';
 import type { DialerEngine } from '../../core/DialerEngine';
 import type { ContactNotesDrafts } from '../services/contactNotesDrafts';
 import { notesApi } from '../services/notesApiService';
@@ -9,7 +10,7 @@ import { ContactHistory } from './ContactHistory';
 import { workspaceContactsApi, workspaceContactName, workspaceContactPhone, type WorkspaceContact } from '../services/workspaceContactsApi';
 import { ContactCallControl, type ContactCalling } from './ContactCallControl';
 import { NativeRecordingController, type RecordingContact } from '../services/nativeRecordingController';
-import type { ConversationRecordingSessionSummary, RecordingSession } from '../../shared/conversationRecording';
+import type { ContactNotesSnapshot, ConversationRecordingSessionSummary, RecordingSession } from '../../shared/conversationRecording';
 import { WorkspaceAppointments, AppointmentDispositionControl, useWorkspaceAppointments } from './WorkspaceAppointments';
 import { appointmentsApi, appointmentTimeSlot, appointmentDateLabel, linkedAppointmentContact, type AppointmentSelection, type WorkspaceAppointment } from '../services/appointmentsApiService';
 
@@ -41,7 +42,14 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
   const [results, setResults] = useState<WorkspaceContact[]>([]);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const loadedSearch = useRef<string | null>(null);
   const [error, setError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
+  const [recordingRefreshError, setRecordingRefreshError] = useState('');
+  const refreshInFlight = useRef<string | null>(null);
+  const dispositionVersion = useRef(0);
+  const dispositionBusyRef = useRef(false);
   const [retainAudio, setRetainAudio] = useState(true);
   const [history, setHistory] = useState<ConversationRecordingSessionSummary[]>([]);
   const [viewed, setViewed] = useState<RecordingSession | null>(null);
@@ -49,32 +57,71 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
   const [audioLoading, setAudioLoading] = useState(false);
   const [operationBusy, setOperationBusy] = useState(false);
   const selectionGeneration = useRef(0);
+  // Changes synchronously at selection start; rendered selected can still be the previous contact.
+  const selectionTarget = useRef<number | null>(null);
+  const selectionPending = useRef(false);
+  const editorRestore = useRef<(typeof cursor.current & { contactId: number; generation: number }) | null>(null);
   const playbackGeneration = useRef(0);
   const mounted = useRef(true);
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const draft = selected ? drafts[selected.id] : undefined;
   const job = viewed ?? (capture.contact?.id === selected?.id ? capture.job : undefined);
   const jobRef = useRef(job); jobRef.current = job;
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++selectionGeneration.current; }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; selectionTarget.current = null; ++selectionGeneration.current; }; }, []);
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
+  useLayoutEffect(() => {
+    const saved = editorRestore.current, editor = editorRef.current;
+    editorRestore.current = null;
+    if (saved && editor && document.activeElement === editor && saved.contactId === selectionTarget.current && saved.generation === selectionGeneration.current) {
+      editor.setSelectionRange(saved.start, saved.end, saved.direction);
+      editor.scrollTop = saved.scrollTop;
+    }
+  }, [draft?.draft, selected?.id]);
+  function receiveNotes(latest: ContactNotesSnapshot) {
+    const editor = editorRef.current, previous = store.get(latest.contactId)?.draft;
+    if (editor && document.activeElement === editor && selectionTarget.current === latest.contactId && selectedRef.current?.id === latest.contactId) {
+      editorRestore.current = { contactId: latest.contactId, generation: selectionGeneration.current, start: editor.selectionStart, end: editor.selectionEnd, direction: editor.selectionDirection, scrollTop: editor.scrollTop };
+    }
+    store.receive(latest);
+    if (store.get(latest.contactId)?.draft === previous) editorRestore.current = null;
+  }
   useEffect(() => {
-    let canceled = false;
-    if (query.trim().length < 3) { setResults([]); setSearching(false); return; }
-    setSearching(true);
-    const timer = setTimeout(() => {
-      workspaceContactsApi.list({ search: query, limit: 20 }).then(response => { if (!canceled) setResults(response.contacts); }).catch(failure => { if (!canceled) setError(failure.message); }).finally(() => { if (!canceled) setSearching(false); });
-    }, 300);
-    return () => { canceled = true; clearTimeout(timer); };
-  }, [query]);
+    let canceled = false, inFlight = false;
+    const search = query.trim();
+    if (search.length < 3) { setResults([]); setSearching(false); setSearchError(''); loadedSearch.current = null; return; }
+    if (!active || mode !== 'notes' || detailVisible) { setSearching(false); return; }
+    const load = async (silent: boolean) => {
+      if (canceled || inFlight) return;
+      inFlight = true;
+      if (!silent) setSearching(true);
+      try {
+        const response = await workspaceContactsApi.list({ search, limit: 20 });
+        if (!canceled) { setResults(response.contacts); setSearchError(''); loadedSearch.current = search; }
+      } catch (failure) { if (!canceled) setSearchError(failure instanceof Error ? failure.message : 'Search is temporarily unavailable. Retrying automatically.'); }
+      finally { inFlight = false; if (!canceled) setSearching(false); }
+    };
+    const cached = loadedSearch.current === search;
+    if (!cached) { setResults([]); setSearching(true); setSearchError(''); }
+    const debounce = setTimeout(() => { void load(cached); }, 300);
+    const refresh = () => { if (!document.hidden) void load(true); };
+    const timer = setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh);
+    return () => { canceled = true; clearTimeout(debounce); clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [query, active, mode, detailVisible]);
   async function selectContact(id: number, appointment: WorkspaceAppointment | null = null) {
     if (selected) void store.flush(selected.id);
     const generation = ++selectionGeneration.current; ++playbackGeneration.current;
-    setLoading(true); setError(''); setAudioUrl(''); setAudioLoading(false); setViewed(null);
+    selectionTarget.current = id; selectionPending.current = true; editorRestore.current = null;
+    let received = false;
+    setRecordingRefreshError('');
+    setLoading(true); setError(''); setRefreshError(''); setAudioUrl(''); setAudioLoading(false); setViewed(null);
     try {
       const contact = await notesApi.contact(id);
       if (!mounted.current || generation !== selectionGeneration.current) return;
-      store.receive(contact);
-      setSelected({ id: contact.id, e164: contact.e164, name: nameOf(contact), state: contact.state ?? undefined });
+      received = true;
+      receiveNotes(contact);
+      const next = { id: contact.id, e164: contact.e164, name: nameOf(contact), state: contact.state ?? undefined };
+      selectedRef.current = next; setSelected(next);
       setSelectedAppointment(appointment ? { id: appointment.id, contactId: id } : null);
       setAppointmentSnapshot(appointment);
       setContactDisposition(contact.last_call_disposition ?? '');
@@ -82,20 +129,24 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
       cursor.current = { start: 0, end: 0, direction: 'none', scrollTop: 0 };
       setRecordingDetails(capture.contact?.id === id && Boolean(capture.error));
       if (store.get(id)?.status === 'error') void store.flush(id);
-      setQuery(''); setResults([]); setHistory([]);
+      setHistory([]);
       const sessions = await notesApi.list(id);
       if (mounted.current && generation === selectionGeneration.current) setHistory(sessions);
-    } catch (failure) { if (mounted.current && generation === selectionGeneration.current) setError(failure instanceof Error ? failure.message : 'Unable to load contact notes.'); }
-    finally { if (mounted.current && generation === selectionGeneration.current) setLoading(false); }
+    } catch (failure) { if (mounted.current && generation === selectionGeneration.current) {
+      if (!received) selectionTarget.current = detailOpen ? selectedRef.current?.id ?? null : null;
+      setError(failure instanceof Error ? failure.message : 'Unable to load contact notes.');
+    } }
+    finally { if (mounted.current && generation === selectionGeneration.current) { selectionPending.current = false; setLoading(false); } }
   }
   function selectAppointment(appointment: WorkspaceAppointment) {
     const contactId = linkedAppointmentContact(appointment);
-    if (!contactId) { setError('This appointment has no linked contact. Find a contact above to take notes.'); return; }
+    if (!contactId) { setError('This appointment has no linked contact. Use Search to find their notes.'); return; }
     void selectContact(contactId, appointment);
   }
   function backToList() {
     if (selected) void store.flush(selected.id);
     ++selectionGeneration.current; ++playbackGeneration.current;
+    selectionTarget.current = null; selectionPending.current = false; editorRestore.current = null; setRecordingRefreshError('');
     setLoading(false); setDetailOpen(false); setHistoryOpen(false); setRecordingDetails(false); setError(''); setAudioUrl(''); setAudioLoading(false);
     requestAnimationFrame(() => {
       const list = detailOrigin === 'contacts' ? document.querySelector<HTMLElement>('.workspace-contacts-list') : appointmentsRef.current?.querySelector<HTMLElement>('.appointments-list');
@@ -128,6 +179,7 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
   async function changeContactDisposition(value: string) {
     if (!selected || contactDispositionBusy) return;
     const id = selected.id;
+    ++dispositionVersion.current; dispositionBusyRef.current = true;
     setContactDispositionBusy(true); setError('');
     try {
       const result = await appointmentsApi.saveContactDisposition(id, value || null);
@@ -138,33 +190,68 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
       appointments.refresh();
     } catch (failure) {
       if (mounted.current && selectedRef.current?.id === id) setError(failure instanceof Error ? failure.message : 'Disposition was not saved. Please retry.');
-    } finally { if (mounted.current) setContactDispositionBusy(false); }
+    } finally { ++dispositionVersion.current; dispositionBusyRef.current = false; if (mounted.current) setContactDispositionBusy(false); }
   }
   async function refreshHistory() {
-    if (!selected) return;
+    if (!selected || selectionPending.current || selectionTarget.current !== selected.id) return;
     const id = selected.id, generation = selectionGeneration.current;
+    const current = () => mounted.current && generation === selectionGeneration.current && selectionTarget.current === id && selectedRef.current?.id === id;
+    const key = `${id}:${generation}`;
+    if (refreshInFlight.current === key) return;
+    refreshInFlight.current = key;
+    const version = dispositionVersion.current;
     try {
       const [contact, sessions] = await Promise.all([notesApi.contact(id), notesApi.list(id)]);
-      if (mounted.current && generation === selectionGeneration.current) { store.receive(contact); setHistory(sessions); }
-    } catch (failure) { if (mounted.current && generation === selectionGeneration.current) setError(failure instanceof Error ? failure.message : 'Unable to refresh notes.'); }
+      if (current()) {
+        receiveNotes(contact); setHistory(sessions); setRefreshError('');
+        const next = { id: contact.id, e164: contact.e164, name: nameOf(contact), state: contact.state ?? undefined };
+        selectedRef.current = next; setSelected(next);
+        if (!dispositionBusyRef.current && version === dispositionVersion.current) setContactDisposition(contact.last_call_disposition ?? '');
+      }
+    } catch { if (current()) setRefreshError('Updates are temporarily unavailable. Retrying automatically.'); }
+    finally { if (refreshInFlight.current === key) refreshInFlight.current = null; }
   }
+  const refreshSelected = useRef(refreshHistory); refreshSelected.current = refreshHistory;
+  useEffect(() => {
+    if (!active || !detailVisible || !selected) return;
+    const refresh = () => { if (!document.hidden) void refreshSelected.current(); };
+    const timer = setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh); document.addEventListener('visibilitychange', refresh);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [active, detailVisible, selected?.id]);
   useEffect(() => { if (capture.phase === 'complete' && selected?.id === capture.contact?.id) void refreshHistory(); }, [capture.phase, capture.contact?.id]);
   useEffect(() => {
-    if (!viewed || !['active', 'finalizing'].includes(viewed.status)) return;
+    if (!active || !detailVisible || !viewed || !['active', 'finalizing'].includes(viewed.status)) { setRecordingRefreshError(''); return; }
     const id = viewed.contactId, sessionId = viewed.sessionId, generation = selectionGeneration.current;
-    let canceled = false, count = 0, timer: ReturnType<typeof setTimeout>;
+    let canceled = false, inFlight = false, failures = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const current = () => !canceled && mounted.current && generation === selectionGeneration.current && selectionTarget.current === id && selectedRef.current?.id === id;
+    const schedule = (delay: number) => { clearTimeout(timer); if (current()) timer = setTimeout(() => { void poll(); }, delay); };
     const poll = async () => {
+      if (!current() || inFlight) return;
+      if (document.hidden) { schedule(30_000); return; }
+      inFlight = true;
+      let continuing = true;
       try {
         const next = await notesApi.get(id, sessionId);
-        if (canceled || generation !== selectionGeneration.current) return;
-        setViewed(next);
-        if (next.status === 'completed' && typeof next.notes === 'string' && Number.isSafeInteger(next.notesRevision)) store.receive({ contactId: id, notes: next.notes, notesRevision: next.notesRevision! });
-        if (['active', 'finalizing'].includes(next.status) && ++count < 300) timer = setTimeout(poll, 3000);
-      } catch { if (!canceled) setError('Recording refresh paused. Reopen the recording to retry.'); }
+        if (!current()) return;
+        if (next.contactId !== id || next.sessionId !== sessionId) throw new Error('Recording response did not match the selected contact.');
+        failures = 0; setRecordingRefreshError(''); setViewed(next);
+        if (next.status === 'completed' && typeof next.notes === 'string' && Number.isSafeInteger(next.notesRevision)) receiveNotes({ contactId: id, notes: next.notes, notesRevision: next.notesRevision! });
+        continuing = ['active', 'finalizing'].includes(next.status);
+      } catch {
+        if (current()) { failures += 1; setRecordingRefreshError('Recording updates are temporarily unavailable. Retrying automatically.'); }
+      } finally {
+        inFlight = false;
+        // Retry transient failures automatically; cap the backoff at 30 seconds.
+        if (current() && continuing) schedule(failures ? Math.min(30_000, 3000 * 2 ** Math.min(failures, 4)) : 3000);
+      }
     };
-    timer = setTimeout(poll, 3000);
-    return () => { canceled = true; clearTimeout(timer); };
-  }, [viewed?.sessionId, viewed?.status, store]);
+    const resume = () => { if (!document.hidden) { clearTimeout(timer); void poll(); } };
+    schedule(3000);
+    window.addEventListener('focus', resume); document.addEventListener('visibilitychange', resume);
+    return () => { canceled = true; clearTimeout(timer); window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', resume); };
+  }, [active, detailVisible, viewed?.sessionId, viewed?.status, store]);
   async function run(operation: () => Promise<unknown>) {
     if (operationBusy) return;
     setOperationBusy(true); setError('');
@@ -204,19 +291,19 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
       <WorkspaceContacts active={active && mode === 'contacts' && !detailVisible} onSelect={id => void selectContact(id)} selecting={loading} selectedContactId={selected?.id} error={error} contactUpdate={contactUpdate}/>
     </div>
     <div className="notes-list-view" hidden={mode !== 'notes' || detailVisible}>
-      <div className="notes-search">
-        <label className="notes-label" htmlFor="notes-contact-search">Search</label>
-        <input id="notes-contact-search" placeholder="Name or phone" value={query} onChange={event => setQuery(event.target.value)} />
-        {searching && <p className="notes-muted" role="status">Finding contacts…</p>}
-        {results.length > 0 && <ul className="notes-results">{results.map(contact => <li key={contact.id}><button disabled={loading} onClick={() => void selectContact(contact.id)}><strong>{workspaceContactName(contact)}</strong><span>{contact.phone}</span></button></li>)}</ul>}
-        {!searching && query.trim().length >= 3 && !results.length && <p className="notes-muted">No matching contacts.</p>}
+      <div className="notes-list-notices">
         {activeCall?.contactId && <button className="notes-link" disabled={loading} onClick={() => void selectContact(activeCall.contactId!)}>Use current call contact</button>}
         {loading && <p role="status" className="notes-muted">Loading contact notes…</p>}
         {!detailVisible && error && <p role="alert" className="assistant-error">{error}</p>}
         {!detailVisible && selected && draft?.error && <p role="alert" className="assistant-error">{draft.error} <button className="notes-link" onClick={() => void selectContact(selected.id, appointmentSnapshot)}>Review note draft</button></p>}
         {recordingElsewhere && <div className="notes-recording-notice"><span>Recording for {capture.contact?.name} · {clock(capture.elapsedSeconds)}</span><button onClick={() => void selectContact(capture.contact!.id)}>Open recording contact</button></div>}
       </div>
-      <div className="notes-appointments-host" ref={appointmentsRef}><WorkspaceAppointments model={appointments} selecting={loading} onSelect={selectAppointment}/></div>
+      <div className="notes-appointments-host" ref={appointmentsRef}><WorkspaceAppointments model={appointments} selecting={loading} onSelect={selectAppointment} searchControl={heading => <CollapsibleSearch id="notes-contact-search" value={query} onChange={setQuery} header={heading}>
+        {searching && <p className="notes-muted" role="status">Finding contacts…</p>}
+        {searchError && <p className="notes-muted" role="status">{searchError}</p>}
+        {results.length > 0 && <ul className="notes-results">{results.map(contact => <li key={contact.id}><button disabled={loading} onClick={() => void selectContact(contact.id)}><strong>{workspaceContactName(contact)}</strong><span>{contact.phone}</span></button></li>)}</ul>}
+        {!searching && query.trim().length >= 3 && !results.length && <p className="notes-muted">No matching contacts.</p>}
+      </CollapsibleSearch>}/></div>
     </div>
     {selected && detailOpen && <div className="notes-detail-view" hidden={!detailVisible}>
       <header className="notes-detail-header">
@@ -224,6 +311,7 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
         <div><strong>{selected.name}</strong>{shownAppointment ? <small>{appointmentDateLabel(shownAppointment)} · {appointmentTimeSlot(shownAppointment)}</small> : <small>{workspaceContactPhone(selected.e164)}</small>}</div>
       </header>
       {error && <p role="alert" className="assistant-error notes-shared-error">{error}</p>}
+      {refreshError && <p role="status" className="notes-muted notes-shared-error">{refreshError}</p>}
       {historyOpen && draft?.error && <p role="alert" className="assistant-error notes-shared-error">{draft.error} <button onClick={toggleHistory}>Review notes</button></p>}
       <div className="notes-detail-body" hidden={historyOpen}>
         {selectedAppointment ? <AppointmentDispositionControl model={appointments} appointment={appointments.selectedAppointment}/> : <div className="appointment-disposition-control">
@@ -260,7 +348,7 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
       {captureStatus && <span className="notes-capture-status" role="status">{captureStatus}</span>}
           {recordingDetails && <div id="notes-recording-details" className="notes-recording-details" role="region" aria-label="Recording details">
             <section className="notes-card" aria-label="Recording options">
-              <div className="notes-row"><h2>Recording</h2><button className="icon-button" onClick={() => void refreshHistory()} aria-label="Refresh contact notes"><RefreshCw size={13}/></button></div>
+              <div className="notes-row"><h2>Recording</h2></div>
               <label className="notes-checkbox"><input type="checkbox" checked={retainAudio} disabled={recording.hasUnsavedAudio()} onChange={event => setRetainAudio(event.target.checked)} />Keep recording for playback</label>
               {recordingCurrent && <>
                 {capture.notice && <p className="notes-muted">{capture.notice}</p>}
@@ -269,6 +357,7 @@ export function NotesWorkspace({ engine, store, recording, mode = 'notes', activ
               </>}
             </section>
         {job && <section className="notes-card" aria-label="AI recording notes"><div className="notes-row"><h2>{job.status === 'completed' ? 'Final AI notes' : 'Live AI draft'}</h2><small>{job.status.replace('_', ' ')}</small></div><p className="notes-text">{job.status === 'completed' ? job.summary || 'Notes added to this contact.' : job.draftNotes || 'The first live AI draft appears after roughly a minute of audio and processing.'}</p>{job.status !== 'completed' && <p className="notes-muted">Draft only. Review AI notes for accuracy; saved notes update after finalization.</p>}
+          {recordingRefreshError && <p className="notes-muted" role="status">{recordingRefreshError}</p>}
           {job.error && <p className="assistant-error">{job.error}</p>}
           {job.segments.map(segment => <div className="notes-segment" key={segment.sequence}><span>Part {segment.sequence + 1} · {segment.status.replace('_', ' ')}</span>{segment.audioAvailable && <button disabled={audioLoading} onClick={() => void run(() => play(segment.sequence))}>Play part {segment.sequence + 1}</button>}{segment.retryable && ['failed', 'needs_review'].includes(segment.status) && <button disabled={operationBusy} onClick={() => void run(async () => { const generation = selectionGeneration.current; const next = await notesApi.retry(job.contactId, job.sessionId, segment.sequence); if (generation === selectionGeneration.current) setViewed(next); })}>Retry part {segment.sequence + 1}</button>}{segment.error && <small>{segment.error}</small>}</div>)}
           {viewed && !['completed', 'canceled'].includes(viewed.status) && viewed.sessionId !== (recording.hasUnsavedAudio() ? capture.sessionId : null) && <div className="notes-row">

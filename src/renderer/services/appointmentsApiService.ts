@@ -1,4 +1,4 @@
-import { authenticatedFetch } from './dialerApiService';
+import { authenticatedFetch, getStoredUser } from './dialerApiService';
 import { isAppointmentVisible } from '../../shared/appointmentVisibility';
 import { getAppointmentFollowUpStatus, type FollowUpAppointmentEvidence } from '../../shared/appointmentFollowUpStatus';
 
@@ -77,32 +77,64 @@ export function appointmentStatusBadge(appointment: WorkspaceAppointment, now: D
   const disposition = appointment.contact?.last_call_disposition?.trim();
   if (appointment.status === 'no_show' || disposition?.toLowerCase().replace(/[ _-]+/g, ' ') === 'no show') return { text: 'No show', tone: 'no-show' };
   if (appointmentIsClient(appointment)) return { text: 'Client', tone: 'client' };
+  if (disposition?.toLowerCase() === 'closed') return { text: 'Closed', tone: 'client' };
+  if (/^follow[ -]?up(?: needed)?$/i.test(disposition ?? '')) return { text: 'Follow-up needed', tone: 'needed' };
   const followUp = allowFollowUp ? getAppointmentFollowUpStatus(appointment, now, timeZone) : null;
   if (followUp) return { text: followUp === 'needed' ? 'Follow up needed' : 'Follow up scheduled', tone: followUp };
   if (disposition) return { text: disposition, tone: 'neutral' };
   const status = appointment.status?.replace(/[_-]/g, ' ').trim();
   return { text: status ? status.charAt(0).toUpperCase() + status.slice(1) : 'No Disposition', tone: 'neutral' };
 }
-export function localDateValue(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+/** All day keys and displayed times use the account preference from /api/auth/me. */
+export function viewerTimeZone(): string {
+  const configured = getStoredUser()?.timezone;
+  if (typeof configured === 'string' && configured.trim()) {
+    try { return new Intl.DateTimeFormat('en-US', { timeZone: configured }).resolvedOptions().timeZone; } catch { /* invalid legacy preference: use OS fallback */ }
+  }
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
 }
-export function appointmentDateRange(date: string): { start: Date; end: Date } {
+export function localDateValue(date: Date, timeZone = viewerTimeZone()): string {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const value = (part: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === part)?.value;
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
+function calendarDate(date: string): Date {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Choose a valid date.');
-  const start = new Date(`${date}T00:00:00`), end = new Date(`${date}T23:59:59.999`);
-  if (!Number.isFinite(start.getTime()) || localDateValue(start) !== date) throw new Error('Choose a valid date.');
-  return { start, end };
+  const result = new Date(`${date}T12:00:00Z`);
+  if (!Number.isFinite(result.getTime()) || result.toISOString().slice(0, 10) !== date) throw new Error('Choose a valid date.');
+  return result;
 }
 export function shiftAppointmentDate(date: string, offset: number): string {
-  const { start } = appointmentDateRange(date); start.setDate(start.getDate() + offset); return localDateValue(start);
+  const result = calendarDate(date);
+  result.setUTCDate(result.getUTCDate() + offset);
+  return result.toISOString().slice(0, 10);
 }
-export function viewerTimeZone(): string {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+export function appointmentDateRange(date: string, timeZone = viewerTimeZone()): { start: Date; end: Date } {
+  // Locate the first instant of each calendar day rather than adding 24 hours:
+  // daylight-saving transitions can make an account's day 23 or 25 hours long.
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const dayKey = (ms: number) => {
+    const parts = formatter.formatToParts(new Date(ms));
+    const value = (part: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === part)?.value;
+    return `${value('year')}-${value('month')}-${value('day')}`;
+  };
+  const boundary = (day: string) => {
+    const center = calendarDate(day).getTime();
+    let lower = center - 36 * 3_600_000, upper = center + 36 * 3_600_000;
+    while (lower < upper) {
+      const middle = Math.floor((lower + upper) / 2);
+      if (dayKey(middle) < day) lower = middle + 1; else upper = middle;
+    }
+    if (dayKey(lower) !== day) throw new Error('Choose a valid date.');
+    return lower;
+  };
+  return { start: new Date(boundary(date)), end: new Date(boundary(shiftAppointmentDate(date, 1)) - 1) };
 }
 
 export const appointmentsApi = {
-  async list(date: string): Promise<WorkspaceAppointment[]> {
-    const { start, end } = appointmentDateRange(date);
-    const params = new URLSearchParams({ startDate: start.toISOString(), endDate: end.toISOString(), includeExternal: 'true', includeFollowUp: 'true', viewerTimeZone: viewerTimeZone() });
+  async list(date: string, timeZone = viewerTimeZone()): Promise<WorkspaceAppointment[]> {
+    const { start, end } = appointmentDateRange(date, timeZone);
+    const params = new URLSearchParams({ startDate: start.toISOString(), endDate: end.toISOString(), includeExternal: 'true', includeFollowUp: 'true', viewerTimeZone: timeZone });
     const body = await request<WorkspaceAppointment[] | { appointments?: WorkspaceAppointment[]; data?: WorkspaceAppointment[] }>(`/api/appointments?${params}`);
     const rows = Array.isArray(body) ? body : body.appointments ?? body.data;
     if (!Array.isArray(rows)) throw new Error('Unable to read the appointment list. Please refresh.');
