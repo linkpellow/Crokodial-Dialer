@@ -11,6 +11,13 @@ export interface AssistantReply {
   proposedActions?: Array<{ name: string }>;
 }
 
+class AssistantApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = 'AssistantApiError';
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!API_BASE) throw new Error('Crokodial connection is not configured. Set VITE_API_BASE and rebuild.');
   const response = await authenticatedFetch(platformUrl(path), {
@@ -18,7 +25,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { 'x-crokodial-contract-version': '2026-02-26.1', ...options?.headers },
   });
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error?.message ?? body?.message ?? `Crokodial request failed (${response.status}).`);
+  if (!response.ok) throw new AssistantApiError(body?.error?.message ?? body?.message ?? `Crokodial request failed (${response.status}).`, response.status, body?.error?.code);
   return (body?.data ?? body) as T;
 }
 
@@ -42,7 +49,15 @@ export async function sendAssistantMessage(agentId: number, sessionId: string, m
   return result;
 }
 export async function disposeAssistantSession(agentId: number, sessionId: string): Promise<void> {
-  await request(`/api/ai-agents/${agentId}/test/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  try {
+    await request(`/api/ai-agents/${agentId}/test/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  } catch (error) {
+    // Sessions live in server memory and may already be gone after a restart.
+    // Only that exact absence completes reset; missing agents and auth errors
+    // still need to reach the caller without discarding its local conversation.
+    if (error instanceof AssistantApiError && error.status === 404 && error.code === 'NOT_FOUND' && error.message === 'Test session not found') return;
+    throw error;
+  }
 }
 export async function openPlatform(path: '/plans' | '/ai-assistants'): Promise<void> {
   if (!API_BASE) throw new Error('Crokodial connection is not configured.');

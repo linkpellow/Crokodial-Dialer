@@ -14,6 +14,7 @@ const { _electron: electron } = require('playwright');
     await app.evaluate(({ ipcMain }) => {
       global.testRequests = [];
       global.invalidateSession = false;
+      global.sessionResetResult = { status: 404, code: 'NOT_FOUND', message: 'Test session not found' };
       let sessionCount = 0;
       ipcMain.removeHandler('api-fetch');
       ipcMain.handle('api-fetch', async (_, payload) => {
@@ -37,6 +38,8 @@ const { _electron: electron } = require('playwright');
         else if (request.path.endsWith('/test/session')) data = { sessionId: `session-${++sessionCount}` };
         else if (request.method === 'DELETE' && request.path.includes('/test/session/')) {
           await new Promise(resolve => { global.releaseSessionReset = resolve; });
+          status = global.sessionResetResult.status;
+          if (status !== 200) data = { error: { code: global.sessionResetResult.code, message: global.sessionResetResult.message } };
         }
         else if (request.path.endsWith('/test/message')) {
           await new Promise(resolve => setTimeout(resolve, 900));
@@ -47,6 +50,8 @@ const { _electron: electron } = require('playwright');
     });
     await page.reload();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
+    // Drive the test renderer via CDP without intercepting the user's keyboard.
+    await app.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.hide(); });
     assert.equal((await app.evaluate(() => global.testRequests)).some(request => request.path.startsWith('/api/dialer/')), false, 'Do not initialize calling before authenticated sign-in');
     await page.getByPlaceholder('Email', { exact: true }).fill('native-smoke@example.test');
     await page.getByPlaceholder('Password', { exact: true }).fill('Deliberately incorrect fixture');
@@ -121,12 +126,29 @@ const { _electron: electron } = require('playwright');
     await page.getByRole('status').waitFor({ state: 'hidden' });
     assert.equal(await page.getByLabel('Personal Assistant', { exact: true }).isDisabled(), false);
     assert.equal(await page.getByLabel('Message your assistant').inputValue(), '');
+    assert.equal(await page.getByRole('alert').count(), 0, 'An already missing session resets successfully after a server restart');
+    assert.equal(await page.getByText('Verified test reply. Your draft remains private.', { exact: true }).count(), 0);
     await page.getByLabel('Personal Assistant', { exact: true }).selectOption('9');
     assert.equal(await page.getByLabel('Message your assistant').inputValue(), 'Second assistant draft');
     await page.getByLabel('Personal Assistant', { exact: true }).selectOption('7');
     await page.getByLabel('Assistant service').selectOption('insurance');
     assert.equal(await page.getByLabel('Message your assistant').inputValue(), 'Independent research draft', 'Reset only clears the captured conversation');
     await page.getByLabel('Assistant service').selectOption('platform');
+    await page.getByLabel('Message your assistant').fill('Start a new session after the restart');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await page.getByText('Verified test reply. Your draft remains private.', { exact: true }).waitFor();
+    assert.equal((await app.evaluate(() => global.testRequests)).filter(request => request.path.endsWith('/test/session') && request.method === 'POST').length, 2, 'Reset must discard the stale remote session ID');
+    await page.getByLabel('Message your assistant').fill('Keep this draft if reset is denied');
+    for (const failure of [{ status: 403, code: 'FORBIDDEN', message: 'Access denied' }, { status: 404, code: 'NOT_FOUND', message: 'AI agent not found' }]) {
+      await app.evaluate((_, result) => { global.sessionResetResult = result; }, failure);
+      await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+      await page.getByText('Clearing conversation…', { exact: true }).waitFor();
+      await app.evaluate(() => global.releaseSessionReset());
+      await page.getByRole('alert').filter({ hasText: failure.message }).waitFor();
+      assert.equal(await page.getByLabel('Message your assistant').inputValue(), 'Keep this draft if reset is denied');
+      assert.equal(await page.getByLabel('Message your assistant').isDisabled(), false);
+      assert.equal(await page.getByText('Verified test reply. Your draft remains private.', { exact: true }).count(), 1, 'Real reset failures must preserve the conversation');
+    }
     await page.getByRole('tab', { name: 'Dialer', exact: true }).click();
     await page.screenshot({ path: 'artifacts/native-dialer-smoke.png' });
     await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
@@ -143,12 +165,19 @@ const { _electron: electron } = require('playwright');
       assert.ok(result.reply && !result.reply.includes('ask me for a plan or drug lookup'));
       console.log('PASS: packaged app automatically selects installed local model and receives a grounded conversational reply.');
     }
-    await app.evaluate(() => { global.invalidateSession = true; });
+    await page.getByLabel('Assistant service').selectOption('platform');
+    await app.evaluate(() => { global.invalidateSession = true; global.sessionResetResult = { status: 401, code: 'TOKEN_EXPIRED', message: 'Session expired' }; });
+    await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+    await page.getByText('Clearing conversation…', { exact: true }).waitFor();
+    await app.evaluate(() => global.releaseSessionReset());
+    await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem('crokodial_auth_token')), null, 'Reset401 must still invalidate authentication');
     await page.reload();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     assert.equal(await page.evaluate(() => localStorage.getItem('crokodial_auth_token')), null);
     assert.equal(await page.evaluate(() => localStorage.getItem('crokodial_auth_user')), null);
     console.log('PASS: desktop login endpoint/header/envelope, invalid-login error, bearer session restoration and invalidated-session cleanup; all authentication uses isolated fixtures.');
+    console.log('PASS: missing remote session404 clears locally and creates a fresh session; forbidden/missing-agent errors preserve drafts and turns; reset401 still signs out.');
     console.log('PASS: actual packaged insurance worker quote; shared plan guidance; native app, mounted dialer audio, dial input/draft preservation, pending assistant navigation, persistent sessions, delayed reset isolation and locking, cross-conversation plan locking, permission error, plan catalog and no renderer errors. All platform responses isolated fixtures; no calls or messages sent.');
   } finally { await app.close(); fs.rmSync(profile, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
