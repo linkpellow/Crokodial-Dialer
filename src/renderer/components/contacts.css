@@ -1,7 +1,11 @@
 .workspace-contacts, .contact-history { display: flex; flex-direction: column; flex: 1; min-height: 0; color: #e7f1e1; overflow: hidden; }
 .workspace-contacts { height: 100%; padding: 10px; background: radial-gradient(ellipse at 90% 0, #34512555, transparent 48%), #10291a; }
 .workspace-contact-toolbar { flex-shrink: 0; padding-bottom: 9px; border-bottom: 1px solid #ffffff0c; -webkit-app-region: drag; }
-.workspace-contact-toolbar .workspace-list-filters { flex: 1; border-bottom: 0; padding: 0; }
+.workspace-contact-filters { display: inline-flex; width: 124px; height: 28px; padding: 2px; border: 1px solid #a8e06326; border-radius: 999px; background: #081e12a6; -webkit-app-region: no-drag; }
+.workspace-contact-toolbar .workspace-contact-filters button { flex: 1; min-width: 0; border: 1px solid transparent; border-radius: 999px; font-size: 11px; line-height: 1; color: #c1d0b9; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; }
+.workspace-contact-filters button:hover { color: #edf6e5; background-color: #a8e0630a; }
+.workspace-contact-filters button[aria-selected=true] { color: #d2f278; border-color: #91bb452e; background-color: #66871938; }
+@media (prefers-reduced-motion: reduce) { .workspace-contact-toolbar .workspace-contact-filters button { transition: none; } }
 .workspace-contact-toolbar .workspace-search-disclosure { width: 100%; }
 .contact-history-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .contact-history-heading h2 { font-size: 12px; font-weight: 500; margin: 0; }

@@ -163,9 +163,8 @@ function installFixture(ipcMain) {
     await contactFilters.getByRole('tab', { name: 'Clients', exact: true }).click();
     await eventually(async () => (await contactRows.first().getAttribute('data-contact-id')) === '160', 'Client filter must refresh the list');
     assert.ok((await contactRows.evaluateAll(items => items.map(item => Number(item.dataset.contactId)))).every(id => id % 2 === 0));
-    await contactFilters.getByRole('tab', { name: 'Leads', exact: true }).click();
-    await eventually(async () => (await contactRows.first().getAttribute('data-contact-id')) === '159', 'Lead filter must reset its cursor');
-    assert.ok((await contactRows.evaluateAll(items => items.map(item => Number(item.dataset.contactId)))).every(id => id % 2 === 1));
+    await contactFilters.getByRole('tab', { name: 'All', exact: true }).click();
+    await eventually(async () => await contactRows.count() === 50 && await contactRows.nth(1).getAttribute('data-contact-id') === '159', 'All filter must restore both leads and clients');
     await contacts.getByRole('button', { name: 'Search', exact: true }).click();
     await search.fill('Fi');
     await eventually(() => app.evaluate(() => global.fixture.requests.some(item => item.path === '/api/contacts/workspace' && item.query.search === 'Fi')), 'Short search must reach the canonical workspace endpoint');

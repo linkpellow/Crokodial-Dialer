@@ -7,7 +7,7 @@ import './contacts.css';
 export function WorkspaceContacts({ onSelect, selecting = false, selectedContactId, active = true, error: selectionError = '', refreshKey = 0, contactUpdate }: {
   onSelect: (contactId: number) => void; selecting?: boolean; selectedContactId?: number; active?: boolean; error?: string; refreshKey?: number | string; contactUpdate?: WorkspaceContactUpdate | null;
 }) {
-  const [query, setQuery] = useState(''), [filter, setFilter] = useState<WorkspaceContactFilter>('all');
+  const [query, setQuery] = useState(''), [filter, setFilter] = useState<Exclude<WorkspaceContactFilter, 'leads'>>('all');
   const [search, setSearch] = useState(''), [rows, setRows] = useState<WorkspaceContact[]>([]);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null), [hasMore, setHasMore] = useState(false);
@@ -112,7 +112,7 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
   return <section className="workspace-contacts" aria-label="Contacts" aria-busy={loading}>
     <div className="workspace-contact-toolbar">
       <CollapsibleSearch id="workspace-contact-search" value={query} onChange={setQuery} header={
-        <div className="workspace-list-filters" role="tablist" aria-label="Contact type">{(['all', 'leads', 'clients'] as const).map(value => <button key={value} role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div>
+        <div className="workspace-contact-filters" role="tablist" aria-label="Contact type">{(['all', 'clients'] as const).map(value => <button key={value} type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div>
       } />
     </div>
     {selectionError && <p className="workspace-list-error" role="alert">{selectionError}</p>}
@@ -128,7 +128,7 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
           <ChevronRight className="workspace-contact-chevron" size={16} aria-hidden="true"/>
         </button>;
       })}
-      {!loading && !error && loaded && dataKey === stateKey && visibleRows.length === 0 && <p className="workspace-list-message">{search ? 'No contacts match this search.' : filter === 'clients' ? 'No clients yet.' : filter === 'leads' ? 'No leads yet.' : 'No contacts yet.'}</p>}
+      {!loading && !error && loaded && dataKey === stateKey && visibleRows.length === 0 && <p className="workspace-list-message">{search ? 'No contacts match this search.' : filter === 'clients' ? 'No clients yet.' : 'No contacts yet.'}</p>}
       {loading && !backgroundLoading && <p className="workspace-list-message" role="status">Loading contacts…</p>}
       {error && <p className="workspace-list-error" role="alert">{error} <button onClick={() => void load(failedRequest.current.cursor, failedRequest.current.head)}>Retry</button></p>}
       <div ref={sentinelRef} className="workspace-list-sentinel"/>
