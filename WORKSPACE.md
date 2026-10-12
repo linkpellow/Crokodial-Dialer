@@ -27,11 +27,13 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dir
 
 The staging script copies source code, insurance data and the required greeting helper. It excludes `.env`, credentials, caches, wake models and voice training corpora. Source PDFs and extracted text are retained for citations. Refresh the snapshot when authoritative plan data changes. Runtime credentials are never copied into the bundle. An explicit source override retains that source's existing private runtime configuration in the child process only.
 
-The platform assistant remains the default for uploaded plan documents, plan operations, support drafts and shared configured tools. Local research shows shared platform guidance but does not inject uploaded documents into the original local catalog. A platform quote-source-mismatch response offers a handoff to Insurance research while preserving the draft and selected product. Source catalog rates should be checked against current carrier documentation before use.
+The Personal Assistant uses one conversation without mode or plan selectors. Natural plan and benefit questions, plan operations, support drafts and shared tools use the platform. The platform resolves family/variation names from owner-scoped catalog metadata and retrieves each selected variation separately; ambiguous variations require clarification. Questions about premiums and cheaper alternatives use the preserved Compass rate tools with explicit applicant inputs. A bounded history of prior user questions carries plan context between these capabilities; it is retrieval context, not an action authorization or policy evidence. Source catalog rates should be checked against current carrier documentation before use.
 
 ## Workspace Notes
 
-Notes has its own persistent tab. Select an existing contact, edit their canonical notes, and record a connected Workspace call. The selected contact must match the actual call number and registered call identity. Recording mixes the call's existing local and remote audio; it does not open another microphone or stop call-owned tracks. Mute and hold are respected.
+Notes has its own persistent tab. A compact chronological appointment list appears below contact search, defaulting to today with previous/next day, a date picker and Today controls. It uses the existing `/api/appointments` data with `includeExternal` and `includeFollowUp`, and mirrors the platform visibility/follow-up helpers exactly. Manual, focus and 30-second refreshes reflect web changes. The existing disposition catalog and mutation route retain `source: appointments` and the appointment ID, preserving canonical automations. Only matching contact record IDs open notes; unlinked calendar events never create contacts. Follow-up status remains separate from disposition.
+
+Select an appointment or search for an existing contact, edit their canonical notes, and record a connected Workspace call. The selected contact must match the actual call number and registered call identity. Recording mixes the call's existing local and remote audio; it does not open another microphone or stop call-owned tracks. Mute and hold are respected.
 
 Live AI drafts arrive as independently decodable audio segments are processed (normally after the first minute, plus provider processing time). Stopping or ending the call uploads remaining audio and adds one final summary to the contact's current notes. Revision checks preserve simultaneous typing and surface conflicts rather than overwriting notes. Keep recording for playback is initially selected; deleting saved audio keeps the notes.
 
@@ -55,10 +57,12 @@ The Notes fixture uses actual Electron MediaRecorder with synthetic WebAudio str
 npm run typecheck
 npm run test:insurance
 npm run test:native
+node --test tests/appointments-state.test.cjs tests/assistant-routing.test.cjs
+node tests/native-appointments.test.cjs
 npm start
 ```
 
-`test:insurance` verifies the real staged catalog, a source premium, a source formulary comparison, brochure resolution, unknown-product handling and individual-only Golden Rule protection. `test:native` starts the actual Electron app in a disposable profile; all platform requests are isolated fixtures and no calls or external messages are sent. It checks the desktop login route/header/envelope, invalid-login errors, bearer restoration after reload, invalidated-session cleanup, call-audio element continuity, retained dial input/drafts, pending-request navigation, shared plan guidance, persistent sessions, asynchronous reset isolation, shared-plan locking across pending conversations, and a real packaged insurance-engine quote. Screenshots go to ignored `artifacts/`.
+`test:insurance` verifies the real staged catalog, a source premium, a source formulary comparison, brochure resolution, unknown-product handling and individual-only Golden Rule protection. `test:native` starts the actual Electron app in a disposable profile; all platform requests are isolated fixtures and no calls or external messages are sent. It checks the desktop login route/header/envelope, invalid-login errors, bearer restoration after reload, invalidated-session cleanup, call-audio element continuity, retained dial input/drafts, pending-request navigation, automatic plan routing, persistent sessions, asynchronous reset isolation, conversation context across capabilities, and a real packaged insurance-engine quote. Screenshots go to ignored `artifacts/`.
 
 The packaged Apple Silicon app is `release/mac-arm64/Crokodial Workspace.app`. A local build can be run without replacing any installed application. Signed distribution and notarization require the organization's signing identity.
 
@@ -77,3 +81,9 @@ A bounded cold-start check reached the installed qwen3.5:4b-q4_K_M model and ret
 The native worker also passed a real synthetic conversation using automatically selected `qwen3.5:4b-q4_K_M`. Its answer acknowledged missing plan context and did not invent coverage. For this automatically chosen reasoning model only, a narrow private-process compatibility adapter sets `think: false` on local Ollama chat requests because the preserved source stream parser reads visible content, not hidden reasoning. Explicitly configured user models and unrelated requests are untouched. Set `CROKODIAL_TEST_LOCAL_MODEL=1` for the optional actual-model packaged smoke check.
 
 The final packaged Apple Silicon binary passed the optional real-model smoke (`CROKODIAL_TEST_LOCAL_MODEL=1`) using its bundled worker and automatically selected 4b model at the preserved 8192-token context. It also passed the full isolated platform/native navigation smoke from the packaged executable, not only the development runtime. The final app was launched separately with its own persistent user profile and subsequently signed into production as verified above.
+
+## Appointments and automatic routing build — October 12, 2026
+
+Native commits `1d61d4a` and `738130b` add compact appointments and the unified conversation. Compatible platform commit: `4d439f29`. The new build passed 22 native state/routing/real-engine tests and packaged Workspace, appointment and Notes shell fixtures. The synthetic recording regression also confirms appointment selection cannot retarget an active recording. Platform verification passed 4,309 core tests,638 web UI tests and all nine schema/startup gates.
+
+The separately built package is `/tmp/crokodial-workspace-unified-release/mac-arm64/Crokodial Workspace.app`; its `app.asar` SHA-256 is `c0a9d540bff316254329f0c2df1cd747b5ed1be94d5f8c9e3353e45564ef6d29`. It has not replaced the running app. Deploy the compatible backend before opening this package. This update remains pending production approval; earlier production-verification statements above refer to the prior release.
