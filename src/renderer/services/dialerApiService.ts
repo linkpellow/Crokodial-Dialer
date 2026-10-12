@@ -6,8 +6,9 @@
 
 import { extractErrorMessage } from '@/utils/extractErrorMessage';
 
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string)?.replace(/\/$/, '') ?? '';
+const API_BASE = (
+  import.meta.env.VITE_API_BASE?.trim() || 'https://crokodial.com'
+).replace(/\/+$/, '');
 
 const AUTH_TOKEN_KEY = 'crokodial_auth_token';
 const AUTH_USER_KEY = 'crokodial_auth_user';

@@ -230,9 +230,6 @@ export function useDialer(): {
 
   // Fetch phone numbers and user assignments on mount
   useEffect(() => {
-    const apiBase = (import.meta.env.VITE_API_BASE as string)?.trim();
-    if (!apiBase) return;
-
     fetchPhoneNumbers().then((numbers) => {
       setState((prev) => ({
         ...prev,
