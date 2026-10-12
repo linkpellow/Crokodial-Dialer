@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { FileText, Phone, Square, Circle, RefreshCw } from 'lucide-react';
+import { ChevronLeft, Mic, MoreHorizontal, Square, RefreshCw } from 'lucide-react';
 import type { DialerEngine } from '../../core/DialerEngine';
 import type { ContactNotesDrafts } from '../services/contactNotesDrafts';
 import { notesApi } from '../services/notesApiService';
 import { fetchContacts, type Contact } from '../services/dialerApiService';
 import { NativeRecordingController, type RecordingContact } from '../services/nativeRecordingController';
 import type { ConversationRecordingSessionSummary, RecordingSession } from '../../shared/conversationRecording';
-import { WorkspaceAppointments } from './WorkspaceAppointments';
-import { linkedAppointmentContact, type AppointmentSelection, type WorkspaceAppointment } from '../services/appointmentsApiService';
+import { WorkspaceAppointments, AppointmentDispositionControl, useWorkspaceAppointments } from './WorkspaceAppointments';
+import { appointmentsApi, appointmentTimeSlot, appointmentDateLabel, linkedAppointmentContact, type AppointmentSelection, type WorkspaceAppointment } from '../services/appointmentsApiService';
 
 const nameOf = (contact: Contact) => `${contact.firstName ?? contact.first_name ?? ''} ${contact.lastName ?? contact.last_name ?? ''}`.trim() || contact.e164;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
+export function NotesWorkspace({ engine, store, recording }: {
   engine: DialerEngine | null; store: ContactNotesDrafts; recording: NativeRecordingController; onReturnToCall: () => void;
 }) {
   const drafts = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -19,6 +19,13 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
   const [selected, setSelected] = useState<RecordingContact | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AppointmentSelection | null>(null);
   const appointmentsRef = useRef<HTMLDivElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [appointmentSnapshot, setAppointmentSnapshot] = useState<WorkspaceAppointment | null>(null);
+  const appointments = useWorkspaceAppointments(selectedAppointment);
+  const [recordingDetails, setRecordingDetails] = useState(false);
+  const [contactDisposition, setContactDisposition] = useState('');
+  const [contactDispositionBusy, setContactDispositionBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -48,15 +55,21 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
     }, 300);
     return () => { canceled = true; clearTimeout(timer); };
   }, [query]);
-  async function selectContact(id: number, appointment: AppointmentSelection | null = null) {
+  async function selectContact(id: number, appointment: WorkspaceAppointment | null = null) {
+    if (selected) void store.flush(selected.id);
     const generation = ++selectionGeneration.current; ++playbackGeneration.current;
-    setLoading(true); setError(''); setAudioUrl(''); setViewed(null);
+    setLoading(true); setError(''); setAudioUrl(''); setAudioLoading(false); setViewed(null);
     try {
       const contact = await notesApi.contact(id);
       if (!mounted.current || generation !== selectionGeneration.current) return;
       store.receive(contact);
       setSelected({ id: contact.id, e164: contact.e164, name: nameOf(contact) });
-      setSelectedAppointment(appointment);
+      setSelectedAppointment(appointment ? { id: appointment.id, contactId: id } : null);
+      setAppointmentSnapshot(appointment);
+      setContactDisposition(contact.last_call_disposition ?? '');
+      setDetailOpen(true);
+      setRecordingDetails(capture.contact?.id === id && Boolean(capture.error));
+      if (store.get(id)?.status === 'error') void store.flush(id);
       setQuery(''); setResults([]); setHistory([]);
       const sessions = await notesApi.list(id);
       if (mounted.current && generation === selectionGeneration.current) setHistory(sessions);
@@ -66,7 +79,29 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
   function selectAppointment(appointment: WorkspaceAppointment) {
     const contactId = linkedAppointmentContact(appointment);
     if (!contactId) { setError('This appointment has no linked contact. Find a contact above to take notes.'); return; }
-    void selectContact(contactId, { id: appointment.id, contactId });
+    void selectContact(contactId, appointment);
+  }
+  function backToAppointments() {
+    if (selected) void store.flush(selected.id);
+    ++selectionGeneration.current; ++playbackGeneration.current;
+    setLoading(false); setDetailOpen(false); setError(''); setAudioUrl(''); setAudioLoading(false);
+    requestAnimationFrame(() => appointmentsRef.current?.querySelector<HTMLElement>('.appointments-list')?.focus({ preventScroll: true }));
+  }
+  useEffect(() => { if (detailOpen) backRef.current?.focus({ preventScroll: true }); }, [detailOpen]);
+  useEffect(() => {
+    if (capture.contact?.id === selected?.id && capture.error) setRecordingDetails(true);
+  }, [capture.error, capture.contact?.id, selected?.id]);
+  async function changeContactDisposition(value: string) {
+    if (!selected || contactDispositionBusy) return;
+    const id = selected.id;
+    setContactDispositionBusy(true); setError('');
+    try {
+      const result = await appointmentsApi.saveContactDisposition(id, value || null);
+      if (mounted.current && selectedRef.current?.id === id) setContactDisposition(result.disposition ?? '');
+      appointments.refresh();
+    } catch (failure) {
+      if (mounted.current && selectedRef.current?.id === id) setError(failure instanceof Error ? failure.message : 'Disposition was not saved. Please retry.');
+    } finally { if (mounted.current) setContactDispositionBusy(false); }
   }
   async function refreshHistory() {
     if (!selected) return;
@@ -104,7 +139,7 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
     const contact = selected;
     await engine.associateRecordingContact(contact);
     if (!mounted.current || selectedRef.current?.id !== contact.id) return;
-    setViewed(null);
+    setViewed(null); setRecordingDetails(true);
     await recording.start(contact, retainAudio);
   }
   async function play(sequence: number) {
@@ -118,41 +153,64 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
     } finally { if (mounted.current && generation === selectionGeneration.current) setAudioLoading(false); }
   }
   const activeCall = engine?.getRecordingCallSnapshot();
-  const recordingElsewhere = Boolean(capture.contact && selected?.id !== capture.contact.id && recording.hasUnsavedAudio());
+  const recordingElsewhere = Boolean(capture.contact && (!detailOpen || selected?.id !== capture.contact.id) && recording.hasUnsavedAudio());
+  const shownAppointment = appointments.selectedAppointment ?? appointmentSnapshot;
+  const recordingCurrent = capture.contact?.id === selected?.id;
+  const captureStatus = recordingCurrent ? capture.phase === 'recording' ? `Recording · ${clock(capture.elapsedSeconds)}` : capture.phase === 'processing' ? 'Finishing AI notes…' : capture.phase === 'uploading' || capture.phase === 'stopping' ? 'Saving recorded audio…' : capture.phase === 'complete' ? 'Recording finished' : capture.phase === 'starting' ? 'Preparing recording…' : '' : '';
+  const otherFailedDrafts = Object.values(drafts).filter(item => item.contactId !== selected?.id && ['error', 'conflict'].includes(item.status));
   return <div className="notes-workspace">
-    <header className="assistant-header"><div className="assistant-brand"><FileText size={21} className="assistant-mark"/><div><strong>Contact notes</strong><small>CROKODIAL WORKSPACE</small></div></div><button className="icon-button" onClick={onReturnToCall} aria-label="Return to dialer"><Phone size={15}/></button></header>
-    <div className="notes-scroll">
-      <label className="notes-label" htmlFor="notes-contact-search">Find a contact</label>
-      <input id="notes-contact-search" placeholder="Name or phone (3+ characters)" value={query} onChange={event => setQuery(event.target.value)} />
-      {searching && <p className="notes-muted" role="status">Finding contacts…</p>}
-      {results.length > 0 && <ul className="notes-results">{results.map(contact => <li key={contact.id}><button disabled={loading} onClick={() => void selectContact(contact.id)}><strong>{nameOf(contact)}</strong><span>{contact.e164}</span></button></li>)}</ul>}
-      {!searching && query.trim().length >= 3 && !results.length && <p className="notes-muted">No matching contacts.</p>}
-      {activeCall?.contactId && <button className="notes-link" disabled={loading} onClick={() => void selectContact(activeCall.contactId!)}>Use current call contact</button>}
-      {loading && <p role="status" className="notes-muted">Loading contact notes…</p>}
-      {error && <p role="alert" className="assistant-error">{error}</p>}
-      {recordingElsewhere && <div className="notes-card"><p>Recording for {capture.contact?.name} · {clock(capture.elapsedSeconds)}</p><button onClick={() => void selectContact(capture.contact!.id)}>Open recording contact</button></div>}
-      <div ref={appointmentsRef}><WorkspaceAppointments selected={selectedAppointment} compact={Boolean(selected)} selecting={loading} onSelect={selectAppointment}/></div>
-      {!selected && !loading && <p className="notes-empty-compact">Select an appointment or find a contact above to open their notes. During a connected call, record both sides and take live AI notes here.</p>}
-      {selected && <>
-        <button className="notes-back-to-appointments" onClick={() => { appointmentsRef.current?.scrollIntoView({ block: 'start' }); appointmentsRef.current?.querySelector<HTMLDivElement>('.appointments-list')?.focus({ preventScroll: true }); }}>Back to appointments</button>
-        <div className="notes-contact"><div><strong>{selected.name}</strong><small>{selected.e164}</small></div><button className="icon-button" onClick={() => void refreshHistory()} aria-label="Refresh contact notes"><RefreshCw size={13}/></button></div>
+    {otherFailedDrafts.length > 0 && <div className="notes-draft-alert" role="alert"><span>{otherFailedDrafts.length === 1 ? "Another contact’s notes need attention. Their draft is preserved." : `${otherFailedDrafts.length} contacts have notes that need attention. Their drafts are preserved.`}</span><button onClick={() => void selectContact(otherFailedDrafts[0].contactId)}>Review notes</button></div>}
+    <div className="notes-list-view" hidden={detailOpen}>
+      <div className="notes-search">
+        <label className="notes-label" htmlFor="notes-contact-search">Search</label>
+        <input id="notes-contact-search" placeholder="Name or phone" value={query} onChange={event => setQuery(event.target.value)} />
+        {searching && <p className="notes-muted" role="status">Finding contacts…</p>}
+        {results.length > 0 && <ul className="notes-results">{results.map(contact => <li key={contact.id}><button disabled={loading} onClick={() => void selectContact(contact.id)}><strong>{nameOf(contact)}</strong><span>{contact.e164}</span></button></li>)}</ul>}
+        {!searching && query.trim().length >= 3 && !results.length && <p className="notes-muted">No matching contacts.</p>}
+        {activeCall?.contactId && <button className="notes-link" disabled={loading} onClick={() => void selectContact(activeCall.contactId!)}>Use current call contact</button>}
+        {loading && <p role="status" className="notes-muted">Loading contact notes…</p>}
+        {!detailOpen && error && <p role="alert" className="assistant-error">{error}</p>}
+        {!detailOpen && selected && draft?.error && <p role="alert" className="assistant-error">{draft.error} <button className="notes-link" onClick={() => void selectContact(selected.id, appointmentSnapshot)}>Review note draft</button></p>}
+        {recordingElsewhere && <div className="notes-recording-notice"><span>Recording for {capture.contact?.name} · {clock(capture.elapsedSeconds)}</span><button onClick={() => void selectContact(capture.contact!.id)}>Open recording contact</button></div>}
+      </div>
+      <div className="notes-appointments-host" ref={appointmentsRef}><WorkspaceAppointments model={appointments} selecting={loading} onSelect={selectAppointment}/></div>
+    </div>
+    {selected && detailOpen && <div className="notes-detail-view">
+      <header className="notes-detail-header">
+        <button ref={backRef} className="icon-button notes-back" onClick={backToAppointments} aria-label="Back to appointments" title="Back"><ChevronLeft size={21}/></button>
+        <div><strong>{selected.name}</strong>{shownAppointment && <small>{appointmentDateLabel(shownAppointment)} · {appointmentTimeSlot(shownAppointment)}</small>}</div>
+      </header>
+      <div className="notes-detail-body">
+        {selectedAppointment ? <AppointmentDispositionControl model={appointments} appointment={appointments.selectedAppointment}/> : <div className="appointment-disposition-control">
+          <select className="appointment-disposition" aria-label={`Disposition for ${selected.name}`} value={contactDisposition} disabled={contactDispositionBusy || appointments.catalogLoading || Boolean(appointments.catalogError)} onChange={event => void changeContactDisposition(event.target.value)}>
+            <option value="">No Disposition</option>
+            {contactDisposition && !appointments.catalog.some(option => option.name === contactDisposition) && <option value={contactDisposition}>{contactDisposition}</option>}
+            {appointments.catalog.map(option => <option key={option.id} value={option.name}>{option.name}</option>)}
+          </select>
+          {appointments.catalogError && <p role="alert" className="assistant-error">{appointments.catalogError} <button onClick={appointments.retryCatalog}>Retry dispositions</button></p>}
+        </div>}
+        {error && <p role="alert" className="assistant-error">{error}</p>}
+        {recordingElsewhere && <div className="notes-recording-notice"><span>Recording for {capture.contact?.name}</span><button onClick={() => void selectContact(capture.contact!.id)}>Open recording contact</button></div>}
+        {draft?.error && <p role="alert" className="assistant-error">{draft.error}{draft.status === 'error' && <button className="notes-link" onClick={() => void store.flush(selected.id)}>Retry saving notes</button>}</p>}
+        {draft?.status === 'conflict' && <div className="notes-conflict"><details><summary>Review conflicting notes</summary><p>Your draft is preserved. The saved version is:</p><p className="notes-text">{draft.notes}</p></details><button onClick={() => store.resolveConflict(selected.id, 'draft')}>Keep my draft</button><button onClick={() => store.resolveConflict(selected.id, 'latest')}>Use saved notes</button></div>}
         <label className="notes-label" htmlFor="contact-notes">Notes</label>
-        <textarea id="contact-notes" value={draft?.draft ?? ''} disabled={!draft || loading} onChange={event => store.change(selected.id, event.target.value)} placeholder="Type notes for this contact…" />
-        <div className="notes-save"><span role="status">{draft?.status === 'saved' ? 'Saved' : draft?.status === 'saving' ? 'Saving…' : draft?.status === 'conflict' ? 'Review conflict' : draft?.status === 'error' ? 'Not saved' : 'Unsaved changes'}</span><button disabled={!draft || draft.status === 'saved' || draft.status === 'saving' || draft.status === 'conflict'} onClick={() => void store.flush(selected.id)}>Save notes</button></div>
-        {draft?.error && <p role="alert" className="assistant-error">{draft.error}</p>}
-        {draft?.status === 'conflict' && <div className="notes-card"><p>Another editor changed these notes. Your draft is preserved.</p><details><summary>View saved notes</summary><p className="notes-text">{draft.notes}</p></details><button onClick={() => store.resolveConflict(selected.id, 'draft')}>Save my draft</button><button onClick={() => store.resolveConflict(selected.id, 'latest')}>Use saved notes</button></div>}
-        <section className="notes-card" aria-label="Call recording">
-          <div className="notes-row"><h2>Call recording</h2>{capture.contact?.id === selected.id && <span>{clock(capture.elapsedSeconds)}</span>}</div>
-          <p className="notes-muted">Records both sides of this contact’s connected call. Live AI drafts update during the call; final notes are added when you stop.</p>
-          <label className="notes-checkbox"><input type="checkbox" checked={retainAudio} disabled={recording.hasUnsavedAudio()} onChange={event => setRetainAudio(event.target.checked)} />Keep recording for playback</label>
-          {capture.contact?.id === selected.id && ['starting', 'recording'].includes(capture.phase) ? <button className="notes-primary recording-stop" onClick={() => void recording.stop()}><Square size={12}/>Stop and finish notes</button> : <button className="notes-primary" disabled={operationBusy || loading || !activeCall || !['in_call', 'held'].includes(activeCall.state) || recording.hasUnsavedAudio() || capture.phase === 'processing'} onClick={() => void run(start)}><Circle size={12}/>Record call</button>}
-          {capture.contact?.id === selected.id && <>
-            <p className="notes-muted" role="status">{capture.phase === 'recording' ? `Recording · ${capture.pendingSegments} segments awaiting upload` : capture.phase === 'processing' ? 'Finishing AI notes…' : capture.phase === 'uploading' || capture.phase === 'stopping' ? 'Saving recorded audio…' : capture.phase === 'complete' ? 'Recording finished' : capture.phase === 'starting' ? 'Preparing recording…' : ''}</p>
-            {capture.notice && <p className="notes-muted">{capture.notice}</p>}
-            {capture.error && <p className="assistant-error" role="alert">{capture.error}</p>}
-            {(capture.error || capture.phase === 'error') && <div className="notes-row"><button disabled={operationBusy} onClick={() => void run(() => recording.retry())}>Retry recording work</button><button disabled={operationBusy} onClick={() => void run(() => recording.cancel())}>Cancel recording</button></div>}
-          </>}
-        </section>
+        <div className="notes-editor-frame">
+          <textarea id="contact-notes" value={draft?.draft ?? ''} disabled={!draft || loading} onChange={event => store.change(selected.id, event.target.value)} onBlur={() => void store.flush(selected.id)} placeholder="Type notes for this contact…" />
+          <div className="notes-editor-toolbar" aria-label="Call recording">
+            {recordingCurrent && ['starting', 'recording'].includes(capture.phase) ? <button className="notes-record-button recording-stop" aria-label="Stop and finish notes" onClick={() => void recording.stop()}><Square size={13}/>Stop</button> : <button className="notes-record-button" aria-label="Record call" title={!activeCall ? 'Connect a call for this contact to record' : 'Record this connected call'} disabled={operationBusy || loading || !activeCall || !['in_call', 'held'].includes(activeCall.state) || recording.hasUnsavedAudio() || capture.phase === 'processing'} onClick={() => void run(start)}><Mic size={15}/>Record</button>}
+            <span className="notes-capture-status" role="status">{captureStatus}</span>
+            <button className="icon-button" aria-label="Recording details" title="Recording options and history" aria-expanded={recordingDetails} aria-controls="notes-recording-details" onClick={() => setRecordingDetails(value => !value)}><MoreHorizontal size={16}/></button>
+          </div>
+          {recordingDetails && <div id="notes-recording-details" className="notes-recording-details" role="region" aria-label="Recording details">
+            <section className="notes-card" aria-label="Recording options">
+              <div className="notes-row"><h2>Recording</h2><button className="icon-button" onClick={() => void refreshHistory()} aria-label="Refresh contact notes"><RefreshCw size={13}/></button></div>
+              <label className="notes-checkbox"><input type="checkbox" checked={retainAudio} disabled={recording.hasUnsavedAudio()} onChange={event => setRetainAudio(event.target.checked)} />Keep recording for playback</label>
+              {recordingCurrent && <>
+                {capture.notice && <p className="notes-muted">{capture.notice}</p>}
+                {capture.error && <p className="assistant-error" role="alert">{capture.error}</p>}
+                {(capture.error || capture.phase === 'error') && <div className="notes-row"><button disabled={operationBusy} onClick={() => void run(() => recording.retry())}>Retry recording work</button><button disabled={operationBusy} onClick={() => void run(() => recording.cancel())}>Cancel recording</button></div>}
+              </>}
+            </section>
         {job && <section className="notes-card" aria-label="AI recording notes"><div className="notes-row"><h2>{job.status === 'completed' ? 'Final AI notes' : 'Live AI draft'}</h2><small>{job.status.replace('_', ' ')}</small></div><p className="notes-text">{job.status === 'completed' ? job.summary || 'Notes added to this contact.' : job.draftNotes || 'The first live AI draft appears after roughly a minute of audio and processing.'}</p>{job.status !== 'completed' && <p className="notes-muted">Draft only. Review AI notes for accuracy; saved notes update after finalization.</p>}
           {job.error && <p className="assistant-error">{job.error}</p>}
           {job.segments.map(segment => <div className="notes-segment" key={segment.sequence}><span>Part {segment.sequence + 1} · {segment.status.replace('_', ' ')}</span>{segment.audioAvailable && <button disabled={audioLoading} onClick={() => void run(() => play(segment.sequence))}>Play part {segment.sequence + 1}</button>}{segment.retryable && ['failed', 'needs_review'].includes(segment.status) && <button disabled={operationBusy} onClick={() => void run(async () => { const generation = selectionGeneration.current; const next = await notesApi.retry(job.contactId, job.sessionId, segment.sequence); if (generation === selectionGeneration.current) setViewed(next); })}>Retry part {segment.sequence + 1}</button>}{segment.error && <small>{segment.error}</small>}</div>)}
@@ -169,8 +227,10 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
           {audioUrl && <audio controls src={audioUrl} aria-label="Saved call recording"/>}
           {job.audioAvailable && <button className="notes-link" disabled={operationBusy} onClick={() => void run(async () => { const generation = selectionGeneration.current; const next = await notesApi.deleteAudio(job.contactId, job.sessionId); if (generation === selectionGeneration.current) { setViewed(next); setAudioUrl(''); ++playbackGeneration.current; await refreshHistory(); } })}>Delete saved audio (keeps notes)</button>}
         </section>}
-        {history.length > 0 && <section className="notes-card"><h2>Recent recordings</h2>{history.map(session => <button className="notes-history" key={session.sessionId} disabled={operationBusy} onClick={() => void run(async () => { const generation = selectionGeneration.current; const next = await notesApi.get(selected.id, session.sessionId); if (generation === selectionGeneration.current) { ++playbackGeneration.current; setViewed(next); setAudioUrl(''); } })}><span>{new Date(session.startedAt).toLocaleString()}</span><small>{session.status.replace('_', ' ')} · {clock(session.totalDurationSeconds)}</small></button>)}</section>}
-      </>}
-    </div>
+        {history.length > 0 && <section className="notes-card"><h2>Recent recordings</h2>{history.map(session => <button className="notes-history" key={session.sessionId} disabled={operationBusy} onClick={() => void run(async () => { const generation = selectionGeneration.current; const next = await notesApi.get(selected.id, session.sessionId); if (generation === selectionGeneration.current) { ++playbackGeneration.current; setViewed(next); setAudioUrl(''); setAudioLoading(false); } })}><span>{new Date(session.startedAt).toLocaleString()}</span><small>{session.status.replace('_', ' ')} · {clock(session.totalDurationSeconds)}</small></button>)}</section>}
+          </div>}
+        </div>
+      </div>
+    </div>}
   </div>;
 }

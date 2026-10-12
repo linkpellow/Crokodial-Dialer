@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildSync } = require('esbuild');
 const { _electron: electron } = require('playwright');
+const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
 
 (async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'crokodial-notes-test-'));
@@ -57,27 +58,31 @@ const { _electron: electron } = require('playwright');
   fs.writeFileSync(path.join(directory,'main.cjs'),bootstrap.replace("'recording-upload-segment'",JSON.stringify(uploadChannel)));
   const app=await electron.launch({args:[path.join(directory,'main.cjs')],env:{...process.env}});
   try {
+    await hideNativeWindows(app);
     const page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')console.error('Fixture renderer:',m.text());});
+    const openRecordingDetails = async () => { const toggle = page.getByRole('button', { name: 'Recording details', exact: true }); if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click(); };
     await page.getByRole('button',{name:'Use current call contact',exact:true}).click();
     await page.getByLabel('Notes',{exact:true}).fill('Manual note before recording');
-    await page.getByText('Saved',{exact:true}).waitFor();
+    await page.waitForFunction(()=>window.testNotes.store.get(11)?.status==='saved');
     // Creation latency must not create an offset/timestamp gap.
     await app.evaluate(()=>global.createDelay=1400);
     await page.getByRole('button',{name:'Record call',exact:true}).click();
     await page.getByText('Live synthetic draft',{exact:true}).waitFor({timeout:15000}).catch(async error=>{console.error('Live draft diagnostics',await page.locator('body').innerText(),await page.evaluate(()=>window.testNotes.controller.getSnapshot()),errors);throw error;});
     const recordingSession = await page.evaluate(()=>window.testNotes.controller.getSnapshot().sessionId);
+    await page.getByRole('button',{name:'Back to appointments',exact:true}).click();
     await page.locator('[data-appointment-id="112"] .appointment-select').click();
     await page.waitForFunction(()=>document.querySelector('#contact-notes')?.value==='Other contact');
     assert.equal(await page.getByRole('button',{name:'Record call',exact:true}).isDisabled(),true);
     assert.equal(await page.evaluate(()=>window.testNotes.controller.getSnapshot().contact.id),11);
     assert.equal(await page.evaluate(()=>window.testNotes.controller.getSnapshot().sessionId),recordingSession);
     await page.getByRole('button',{name:'Open recording contact',exact:true}).click();
+    await openRecordingDetails();
     await page.waitForFunction(()=>document.querySelector('#contact-notes')?.value==='Manual note before recording');
     await page.getByRole('button',{name:'Dialer',exact:true}).click();
     await page.getByRole('button',{name:'Notes',exact:true}).click();
     assert.equal(await page.getByLabel('Notes',{exact:true}).inputValue(),'Manual note before recording');
     await page.getByLabel('Notes',{exact:true}).fill('Manual note edited during recording');
-    await page.getByText('Saved',{exact:true}).waitFor();
+    await page.waitForFunction(()=>window.testNotes.store.get(11)?.status==='saved');
     await page.getByRole('button',{name:'Stop and finish notes',exact:true}).click();
     await page.getByText('Final AI summary',{exact:true}).waitFor({timeout:15000});
     assert.equal(await page.getByLabel('Notes',{exact:true}).inputValue(),'Manual note edited during recording\nFinal AI summary');
@@ -96,7 +101,7 @@ const { _electron: electron } = require('playwright');
     assert.equal(await page.evaluate(()=>window.testNotes.controller.hasUnsavedAudio()),true);
     await app.evaluate(()=>global.failUpload=false);
     await page.getByRole('button',{name:'Retry recording work',exact:true}).click();
-    await page.getByText('Recording finished',{exact:true}).waitFor({timeout:15000});
+    await page.waitForFunction(()=>window.testNotes.controller.getSnapshot().phase==='complete',{timeout:15000});
     assert.equal(await page.evaluate(()=>window.testNotes.controller.hasUnsavedAudio()),false);
     const source=await page.evaluate(()=>({tracks:window.testNotes.streams.map(s=>s.getTracks()[0].readyState),phase:window.testNotes.controller.getSnapshot().phase}));
     assert.deepEqual(source,{tracks:['live','live'],phase:'complete'});
@@ -116,6 +121,7 @@ const { _electron: electron } = require('playwright');
     assert.deepEqual(await page.evaluate(()=>window.testNotes.streams.map(s=>s.getTracks()[0].readyState)),['live','live']);
     // Persisted needs-review jobs remain recoverable independently of the capture controller.
     await app.evaluate(()=>{const session=Object.values(global.sessions)[0];session.status='needs_review';session.retryable=true;session.segments[0].status='needs_review';session.segments[0].retryable=true;});
+    await openRecordingDetails();
     await page.getByRole('button',{name:'Refresh contact notes',exact:true}).click();
     await page.locator('.notes-history').filter({hasText:'needs review'}).click();
     await page.getByRole('button',{name:'Retry part 1',exact:true}).click();

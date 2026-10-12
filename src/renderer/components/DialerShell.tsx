@@ -62,10 +62,10 @@ export function DialerShell({ onLogout }: { onLogout: () => void }) {
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
         tabs[next]?.click(); tabs[next]?.focus();
       }}>
-        <button id="dialer-tab" role="tab" tabIndex={view === 'dialer' ? 0 : -1} aria-controls="dialer-workspace" aria-selected={view === 'dialer'} onClick={() => setView('dialer')}><Phone size={14}/><span>Dialer</span>{callActive && <i className="live-call-dot" aria-label="Call in progress"/>}</button>
-        <button id="assistant-tab" role="tab" tabIndex={view === 'assistant' ? 0 : -1} aria-controls="assistant-workspace" aria-selected={view === 'assistant'} onClick={() => setView('assistant')}><Sparkles size={14}/><span>Assistant</span></button>
-        <button id="notes-tab" role="tab" tabIndex={view === 'notes' ? 0 : -1} aria-controls="notes-workspace" aria-selected={view === 'notes'} onClick={() => setView('notes')}><FileText size={14}/><span>Notes</span></button>
-        <button id="settings-tab" className="settings-tab" role="tab" tabIndex={view === 'settings' ? 0 : -1} aria-label="Settings" aria-controls="settings-workspace" aria-selected={view === 'settings'} onClick={() => setView('settings')}><Settings size={15}/></button>
+        <button id="dialer-tab" role="tab" tabIndex={view === 'dialer' ? 0 : -1} aria-label="Dialer" title={callActive ? 'Dialer — Call in progress' : 'Dialer'} aria-controls="dialer-workspace" aria-selected={view === 'dialer'} onClick={() => setView('dialer')}><Phone size={18} aria-hidden="true"/>{callActive && <i className="live-call-dot" aria-label="Call in progress"/>}</button>
+        <button id="assistant-tab" role="tab" tabIndex={view === 'assistant' ? 0 : -1} aria-label="Assistant" title="Assistant" aria-controls="assistant-workspace" aria-selected={view === 'assistant'} onClick={() => setView('assistant')}><Sparkles size={18} aria-hidden="true"/></button>
+        <button id="notes-tab" role="tab" tabIndex={view === 'notes' ? 0 : -1} aria-label="Notes" title="Notes" aria-controls="notes-workspace" aria-selected={view === 'notes'} onClick={() => setView('notes')}><FileText size={18} aria-hidden="true"/></button>
+        <button id="settings-tab" role="tab" tabIndex={view === 'settings' ? 0 : -1} aria-label="Settings" title="Settings" aria-controls="settings-workspace" aria-selected={view === 'settings'} onClick={() => setView('settings')}><Settings size={18} aria-hidden="true"/></button>
       </nav>
     </div>
   );

@@ -58,3 +58,29 @@ test('visibility and follow-up rules remain identical to the canonical platform 
     assert.equal(fs.readFileSync(`src/shared/${helper}.ts`, 'utf8'), fs.readFileSync(path.join(platform, `packages/shared/src/utils/${helper}.ts`), 'utf8'));
   }
 });
+test('appointment rows show the complete slot in the viewer zone without inventing missing duration', () => {
+  assert.equal(api.appointmentTimeSlot(appointment({ duration: 15 }), 'America/New_York'), '9:00am - 9:15am');
+  assert.equal(api.appointmentTimeSlot(appointment({ duration: 45 }), 'America/Los_Angeles'), '6:00am - 6:45am');
+  assert.equal(api.appointmentDateLabel(appointment(), 'America/New_York'), 'Mon, Oct 12');
+  assert.equal(api.appointmentTimeSlot(appointment({ duration: undefined }), 'America/New_York'), '9:00am · End time unavailable');
+  assert.equal(api.appointmentTimeSlot(appointment({ duration: 0 }), 'America/New_York'), '9:00am · End time unavailable');
+  assert.equal(api.appointmentTimeSlot(appointment({ all_day: true }), 'America/New_York'), 'All day');
+});
+test('compact badges keep no-show, actual client membership and follow-up evidence distinct', () => {
+  const now = new Date('2026-10-12T17:00:00Z');
+  assert.deepEqual(api.appointmentStatusBadge(appointment({ status: 'no_show' }), now, true, 'America/New_York'), { text: 'No show', tone: 'no-show' });
+  assert.deepEqual(api.appointmentStatusBadge(appointment({ contact: { id: 2, last_call_disposition: 'No Show', client_status: 'client' } }), now), { text: 'No show', tone: 'no-show' });
+  assert.deepEqual(api.appointmentStatusBadge(appointment({ contact: { id: 2, client_status: 'client' } }), now), { text: 'Client', tone: 'client' });
+  assert.deepEqual(api.appointmentStatusBadge(appointment(), now, true, 'America/New_York'), { text: 'Follow up needed', tone: 'needed' });
+  assert.deepEqual(api.appointmentStatusBadge(appointment(), now, false, 'America/New_York'), { text: 'Scheduled', tone: 'neutral' });
+  assert.deepEqual(api.appointmentStatusBadge(appointment({ follow_up_appointments: undefined, contact: { id: 2, last_call_disposition: 'Not interested' } }), now), { text: 'Not interested', tone: 'neutral' });
+});
+test('search-only disposition uses its existing contact binding without inventing an appointment or sending notes', async () => {
+  requests = []; payload = { disposition: null };
+  assert.equal((await api.appointmentsApi.saveContactDisposition(2, null)).disposition, null);
+  assert.equal(new URL(requests[0].url).pathname, '/api/dialer/contacts/2/disposition');
+  assert.deepEqual(JSON.parse(requests[0].options.body), { disposition: null, source: 'sms' });
+  await assert.rejects(api.appointmentsApi.saveContactDisposition(0, 'No Show'), /valid contact/);
+  await assert.rejects(api.appointmentsApi.saveContactDisposition('2', 'No Show'), /valid contact/);
+  assert.equal(requests.length, 1);
+});

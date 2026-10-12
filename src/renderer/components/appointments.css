@@ -1,33 +1,30 @@
-.workspace-appointments { margin: 12px 0; padding: 9px; border: 1px solid #a8e06324; border-radius: 9px; background: #0c160f55; }
-.appointments-heading, .appointments-date, .appointment-mini-controls { display: flex; align-items: center; gap: 6px; }
+.workspace-appointments { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; margin: 8px 0 0; padding: 10px 9px 0; border: 1px solid #a8e06324; border-radius: 9px; background: #0c160f55; }
+.appointments-heading, .appointments-date { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .appointments-heading { justify-content: space-between; }
-.appointments-heading h2 { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 650; margin: 0; }
-.appointments-heading h2 svg { color: #a8e063; }
-.appointments-date { margin: 6px 0 9px; }
-.appointments-date label { flex: 1; min-width: 0; position: relative; font-size: 11px; text-align: center; padding: 5px 0; }
-.notes-workspace .appointments-date input[type=date] { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; }
+.appointments-heading h2 { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; margin: 0; }
+.appointments-heading h2 svg { color: #b2ee65; }
+.appointments-date { margin: 8px 0 6px; }
+.appointments-date label { flex: 1; min-width: 0; position: relative; font-size: 12px; text-align: center; padding: 5px 0; }
+.notes-workspace .appointments-date input[type=date] { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; padding: 0; }
 .appointments-date label:focus-within { outline: 1px solid #a8e063; border-radius: 4px; }
-.appointments-today { border: 1px solid #a8e06330; border-radius: 5px; padding: 3px 6px; color: #c6e6b2; }
-.appointments-list { max-height: min(43vh, 360px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: #476044 transparent; }
-.has-selection .appointments-list { max-height: 180px; }
-.appointment-mini { padding: 7px 5px; border-top: 1px solid #ffffff0f; border-left: 2px solid transparent; }
-.appointment-mini:first-child { border-top: 0; }
-.appointment-mini.selected { border-left-color: #a8e063; background: #99d95e0e; }
-.notes-workspace .appointment-select { display: flex; align-items: baseline; gap: 8px; width: 100%; min-width: 0; text-align: left; color: #eff9e8; padding: 2px 0 4px; }
-.notes-workspace .appointment-select:disabled { opacity: .8; }
-.appointment-select time { flex: 0 0 62px; color: #bed0b4; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.appointment-select strong { font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
-.appointment-mini-controls { justify-content: space-between; gap: 4px; }
-.appointment-meta { min-width: 0; color: #a8b5a2; font-size: 9px; }
-.appointment-follow-up { display: inline-block; padding: 2px 4px; border-radius: 4px; font-size: 8px; line-height: 1.3; }
-.appointment-follow-up.needed { color: #e4c185; background: #bc87301f; }
-.appointment-follow-up.scheduled { color: #b2df8f; background: #8fb4541c; }
-.appointment-mini select { width: 130px; max-width: 52%; min-width: 0; border: 1px solid #a8e06324; background: #203025; color: #e5efdd; border-radius: 5px; padding: 4px; font-size: 9px; -webkit-app-region: no-drag; }
-.appointment-mini select:disabled { opacity: .5; }
-.appointment-mini small, .appointments-zone { display: block; font-size: 9px; color: #9aaf91; line-height: 1.5; }
-.appointments-zone { margin-top: 8px; font-size: 8px; }
+.appointments-today { border: 1px solid #a8e06330; border-radius: 5px; padding: 4px 7px; color: #c6e6b2; font-size: 11px; }
+.appointments-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #476044 transparent; }
+.appointment-mini { border-top: 1px solid #ffffff0f; }
+.appointment-mini.selected { background: #99d95e0e; }
+.notes-workspace .appointment-select { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 60px; text-align: left; color: #eff9e8; padding: 9px 3px; }
+.notes-workspace .appointment-select:hover { background: #99d95e0a; }
+.notes-workspace .appointment-select:disabled { opacity: .55; }
+.appointment-summary { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.appointment-summary time { color: #bacbb1; font-size: 11px; font-variant-numeric: tabular-nums; }
+.appointment-summary strong { font-size: 13px; line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
+.appointment-status { flex: 0 1 auto; max-width: 46%; display: inline-block; padding: 4px 7px; border: 1px solid #9bb78a30; border-radius: 999px; color: #bdd0b2; background: #93aa7920; font-size: 10px; line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+.appointment-status.needed { color: #f3d17d; background: #ad750a26; border-color: #c58c2670; }
+.appointment-status.client, .appointment-status.scheduled { color: #c7f372; background: #61961522; border-color: #85b83866; }
+.appointment-status.no-show { color: #ffb294; background: #a8342128; border-color: #db634a80; }
+.appointment-chevron { flex: 0 0 auto; color: #c7d6bc; opacity: .8; }
+.appointment-disposition-control { flex: 0 0 auto; min-width: 0; }
+.notes-workspace .appointment-disposition { width: 100%; min-width: 0; border: 1px solid #a8e06340; background: #10271a; color: #e5efdd; border-radius: 6px; padding: 7px 10px; font-size: 12px; -webkit-app-region: no-drag; }
+.appointment-disposition:disabled { opacity: .55; }
 .appointments-notice { color: #b6dc9e; font-size: 10px; margin: 5px 0; }
 .appointments-empty { margin: 8px 0; }
-.workspace-appointments button:focus-visible, .workspace-appointments select:focus-visible, .appointments-list:focus-visible { outline: 1px solid #b2ee65; outline-offset: 2px; }
-.notes-empty-compact { font-size: 11px; line-height: 1.6; color: #aebea5; margin: 12px 0; }
-.notes-back-to-appointments { color: #b0d692; text-decoration: underline; font-size: 10px; margin-bottom: 6px; }
+.workspace-appointments button:focus-visible, .appointment-disposition:focus-visible, .appointments-list:focus-visible { outline: 1px solid #b2ee65; outline-offset: -2px; }

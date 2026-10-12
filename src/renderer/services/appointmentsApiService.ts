@@ -1,6 +1,6 @@
 import { authenticatedFetch } from './dialerApiService';
 import { isAppointmentVisible } from '../../shared/appointmentVisibility';
-import type { FollowUpAppointmentEvidence } from '../../shared/appointmentFollowUpStatus';
+import { getAppointmentFollowUpStatus, type FollowUpAppointmentEvidence } from '../../shared/appointmentFollowUpStatus';
 
 export interface WorkspaceAppointment {
   id: number | string;
@@ -54,6 +54,35 @@ export function appointmentIsClient(appointment: WorkspaceAppointment): boolean 
   if (contact && Object.prototype.hasOwnProperty.call(contact, 'client_status')) return contact.client_status === 'client';
   return contact?.last_call_disposition?.trim() === 'Closed';
 }
+/** Keep range labels in the same viewer timezone used by the appointment query. */
+export function appointmentTimeSlot(appointment: WorkspaceAppointment, timeZone = viewerTimeZone()): string {
+  if (appointment.all_day) return 'All day';
+  const start = new Date(appointment.scheduled_at);
+  if (!Number.isFinite(start.getTime())) return 'Time unavailable';
+  const format = (date: Date) => new Intl.DateTimeFormat('en-US', {
+    timeZone, hour: 'numeric', minute: '2-digit',
+  }).format(date).replace(/\s/g, '').toLowerCase();
+  const startLabel = format(start);
+  const end = new Date(start.getTime() + appointment.duration * 60_000);
+  if (!Number.isFinite(appointment.duration) || appointment.duration <= 0 || !Number.isFinite(end.getTime())) return `${startLabel} · End time unavailable`;
+  return `${startLabel} - ${format(end)}`;
+}
+export function appointmentDateLabel(appointment: Pick<WorkspaceAppointment, 'scheduled_at'>, timeZone = viewerTimeZone()): string {
+  const date = new Date(appointment.scheduled_at);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('en-US', {
+    timeZone, weekday: 'short', month: 'short', day: 'numeric',
+  }).format(date) : 'Date unavailable';
+}
+export function appointmentStatusBadge(appointment: WorkspaceAppointment, now: Date, allowFollowUp = true, timeZone = viewerTimeZone()): { text: string; tone: string } {
+  const disposition = appointment.contact?.last_call_disposition?.trim();
+  if (appointment.status === 'no_show' || disposition?.toLowerCase().replace(/[ _-]+/g, ' ') === 'no show') return { text: 'No show', tone: 'no-show' };
+  if (appointmentIsClient(appointment)) return { text: 'Client', tone: 'client' };
+  const followUp = allowFollowUp ? getAppointmentFollowUpStatus(appointment, now, timeZone) : null;
+  if (followUp) return { text: followUp === 'needed' ? 'Follow up needed' : 'Follow up scheduled', tone: followUp };
+  if (disposition) return { text: disposition, tone: 'neutral' };
+  const status = appointment.status?.replace(/[_-]/g, ' ').trim();
+  return { text: status ? status.charAt(0).toUpperCase() + status.slice(1) : 'No Disposition', tone: 'neutral' };
+}
 export function localDateValue(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -88,6 +117,15 @@ export const appointmentsApi = {
     const data = await request<{ dispositions: AppointmentDisposition[] }>('/api/dialer/dispositions');
     if (!Array.isArray(data.dispositions)) throw new Error('Unable to read dispositions. Please refresh.');
     return data.dispositions;
+  },
+  async saveContactDisposition(contactId: number, disposition: string | null): Promise<AppointmentDispositionResult> {
+    if (!Number.isSafeInteger(contactId) || contactId <= 0) throw new Error('Choose a valid contact before updating its disposition.');
+    const result = await request<AppointmentDispositionResult>(`/api/dialer/contacts/${contactId}/disposition`, {
+      // Legacy generic-contact source preserves call dates when editing outside a call.
+      method: 'POST', body: JSON.stringify({ disposition, source: 'sms' }),
+    });
+    if (result.disposition !== null && typeof result.disposition !== 'string') throw new Error('Unable to verify the saved disposition. Refresh before trying again.');
+    return result;
   },
   async saveDisposition(appointment: WorkspaceAppointment, disposition: string | null): Promise<AppointmentDispositionResult> {
     const contactId = linkedAppointmentContact(appointment);

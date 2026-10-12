@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
-import { getAppointmentFollowUpStatus } from '../../shared/appointmentFollowUpStatus';
 import {
-  appointmentsApi, appointmentName, appointmentKey, appointmentIsClient, linkedAppointmentContact,
-  localDateValue, shiftAppointmentDate, viewerTimeZone,
+  appointmentsApi, appointmentName, appointmentKey, appointmentStatusBadge, appointmentTimeSlot, linkedAppointmentContact,
+  localDateValue, shiftAppointmentDate,
   type AppointmentDisposition, type AppointmentSelection, type WorkspaceAppointment,
 } from '../services/appointmentsApiService';
 import './appointments.css';
 
-export function WorkspaceAppointments({ selected, compact, selecting, onSelect }: {
-  selected: AppointmentSelection | null; compact: boolean; selecting: boolean; onSelect: (appointment: WorkspaceAppointment) => void;
-}) {
+export function useWorkspaceAppointments(selected: AppointmentSelection | null) {
   const [date, setDate] = useState(() => localDateValue(new Date()));
   const [rows, setRows] = useState<WorkspaceAppointment[]>([]);
   const [catalog, setCatalog] = useState<AppointmentDisposition[]>([]);
@@ -21,11 +18,14 @@ export function WorkspaceAppointments({ selected, compact, selecting, onSelect }
   const [saveError, setSaveError] = useState<{ key: string; message: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  const [noticeKey, setNoticeKey] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const generation = useRef(0), catalogGeneration = useRef(0);
   const savingRef = useRef(false), mounted = useRef(true);
   const dateRef = useRef(date); dateRef.current = date;
+  const rowsRef = useRef(rows); rowsRef.current = rows;
   const todayRef = useRef(localDateValue(new Date()));
+  const selectedRef = useRef(selected); selectedRef.current = selected;
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++generation.current; ++catalogGeneration.current; }; }, []);
   const load = useCallback(async (background = false) => {
@@ -60,7 +60,7 @@ export function WorkspaceAppointments({ selected, compact, selecting, onSelect }
       const clock = new Date(), today = localDateValue(clock); setNow(clock);
       if (todayRef.current !== today) {
         const previousToday = todayRef.current; todayRef.current = today;
-        if (dateRef.current === previousToday) { setDate(today); return; }
+        if (dateRef.current === previousToday && !selectedRef.current) { setDate(today); return; }
       }
       void load(true);
     };
@@ -72,15 +72,21 @@ export function WorkspaceAppointments({ selected, compact, selecting, onSelect }
   async function save(appointment: WorkspaceAppointment, value: string) {
     if (savingRef.current) return;
     const key = appointmentKey(appointment), contactId = linkedAppointmentContact(appointment), currentDate = date;
+    // A background refresh may remove/reassociate the selected appointment.
+    // Never send a stale contact binding back through the canonical mutation.
+    if (!contactId || !rowsRef.current.some(row => appointmentKey(row) === key && linkedAppointmentContact(row) === contactId)) {
+      setSaveError({ key, message: 'This appointment changed. Reopen it from the list before updating its disposition.' });
+      return;
+    }
     savingRef.current = true; ++generation.current; setLoading(false); setSaving(key); setSaveError(null); setNotice('');
     try {
       const result = await appointmentsApi.saveDisposition(appointment, value || null);
       if (!mounted.current || currentDate !== dateRef.current) return;
-      setRows(current => current.map(row => row.contact_id === contactId && row.contact ? {
+      setRows(current => current.map(row => linkedAppointmentContact(row) === contactId && row.contact ? {
         ...row, contact: { ...row.contact, last_call_disposition: result.disposition,
           ...(Object.prototype.hasOwnProperty.call(result, 'clientStatus') ? { client_status: result.clientStatus } : {}) },
       } : row));
-      setNotice(result.noShow?.notice || `Disposition saved for ${appointmentName(appointment)}.`);
+      setNoticeKey(key); setNotice(result.noShow?.notice || '');
     } catch (failure) {
       if (mounted.current && currentDate === dateRef.current) setSaveError({ key, message: failure instanceof Error ? failure.message : 'Disposition was not saved. Please retry.' });
     } finally {
@@ -91,46 +97,66 @@ export function WorkspaceAppointments({ selected, compact, selecting, onSelect }
 
   const today = localDateValue(now);
   const heading = new Date(`${date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' });
-  return <section className={`workspace-appointments${compact ? ' has-selection' : ''}`} aria-label="Appointments">
-    <div className="appointments-heading"><h2><CalendarDays size={13}/>{date === today ? 'Today’s appointments' : 'Appointments'}</h2><button className="icon-button" disabled={Boolean(saving) || loading} aria-label="Refresh appointments" onClick={() => { setNow(new Date()); void load(true); void loadCatalog(); }}><RefreshCw size={12}/></button></div>
+  const selectedAppointment = selected ? rows.find(row => row.id === selected.id && linkedAppointmentContact(row) === selected.contactId) ?? null : null;
+  const refresh = () => { setNow(new Date()); void load(true); void loadCatalog(); };
+  return {
+    date, today, heading, rows, selectedAppointment, now, loading, loadError, catalog, catalogLoading,
+    catalogError, saving, saveError, notice, noticeKey, setDate, refresh, retryLoad: () => void load(),
+    retryCatalog: () => void loadCatalog(), saveDisposition: save,
+  };
+}
+
+export type WorkspaceAppointmentsModel = ReturnType<typeof useWorkspaceAppointments>;
+
+export function WorkspaceAppointments({ model, selecting, onSelect }: {
+  model: WorkspaceAppointmentsModel; selecting: boolean; onSelect: (appointment: WorkspaceAppointment) => void;
+}) {
+  const { date, today, heading, rows, selectedAppointment, now, loading, loadError, saving } = model;
+  return <section className="workspace-appointments" aria-label="Appointments">
+    <div className="appointments-heading"><h2><CalendarDays size={15}/>{date === today ? 'Today’s appointments' : 'Appointments'}</h2><button className="icon-button" disabled={Boolean(saving) || loading} aria-label="Refresh appointments" onClick={model.refresh}><RefreshCw size={15}/></button></div>
     <div className="appointments-date">
-      <button className="icon-button" disabled={Boolean(saving)} aria-label="Previous day" onClick={() => setDate(shiftAppointmentDate(date, -1))}><ChevronLeft size={13}/></button>
-      <label><span>{heading}</span><input type="date" aria-label="Appointment date" value={date} disabled={Boolean(saving)} onChange={event => { if (event.target.value && /^\d{4}-\d{2}-\d{2}$/.test(event.target.value)) setDate(event.target.value); }}/></label>
-      <button className="icon-button" disabled={Boolean(saving)} aria-label="Next day" onClick={() => setDate(shiftAppointmentDate(date, 1))}><ChevronRight size={13}/></button>
-      <button className="appointments-today" disabled={Boolean(saving) || date === today} onClick={() => setDate(localDateValue(new Date()))}>Today</button>
+      <button className="icon-button" disabled={Boolean(saving)} aria-label="Previous day" onClick={() => model.setDate(shiftAppointmentDate(date, -1))}><ChevronLeft size={17}/></button>
+      <label><span>{heading}</span><input type="date" aria-label="Appointment date" value={date} disabled={Boolean(saving)} onChange={event => { if (event.target.value && /^\d{4}-\d{2}-\d{2}$/.test(event.target.value)) model.setDate(event.target.value); }}/></label>
+      <button className="icon-button" disabled={Boolean(saving)} aria-label="Next day" onClick={() => model.setDate(shiftAppointmentDate(date, 1))}><ChevronRight size={17}/></button>
+      <button className="appointments-today" disabled={Boolean(saving) || date === today} onClick={() => model.setDate(localDateValue(new Date()))}>Today</button>
     </div>
     {loading && <p className="notes-muted" role="status">Loading appointments…</p>}
-    {loadError && <p className="assistant-error" role="alert">{loadError} <button onClick={() => void load()}>Retry</button></p>}
-    {catalogError && <p className="assistant-error" role="alert">{catalogError} <button onClick={() => void loadCatalog()}>Retry dispositions</button></p>}
-    {notice && <p className="appointments-notice" role="status">{notice}</p>}
-    {!loading && !loadError && rows.length === 0 && <p className="notes-muted appointments-empty">No appointments for this date. Choose another day or find a contact above.</p>}
-    {rows.length > 0 && <div className="appointments-list" tabIndex={0} aria-label="Appointment list">
+    {loadError && <p className="assistant-error" role="alert">{loadError} <button onClick={model.retryLoad}>Retry</button></p>}
+    {!loading && !loadError && rows.length === 0 && <p className="notes-muted appointments-empty">No appointments for this date.</p>}
+    <div className="appointments-list" tabIndex={rows.length ? 0 : -1} aria-label="Appointment list">
       {rows.map(appointment => {
         const key = appointmentKey(appointment), contactId = linkedAppointmentContact(appointment), name = appointmentName(appointment);
-        const selectedRow = selected && selected.id === appointment.id && selected.contactId === contactId;
-        const followUp = !loadError && !appointmentIsClient(appointment) ? getAppointmentFollowUpStatus(appointment, now, viewerTimeZone()) : null;
-        const disposition = appointment.contact?.last_call_disposition ?? '';
-        const editable = Boolean(contactId && Number.isSafeInteger(appointment.id) && Number(appointment.id) > 0);
-        const rowError = saveError?.key === key ? saveError.message : '';
-        const time = appointment.all_day ? 'All day' : new Date(appointment.scheduled_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const selectedRow = selectedAppointment === appointment;
+        const time = appointmentTimeSlot(appointment), badge = appointmentStatusBadge(appointment, now, !loadError);
         return <article className={`appointment-mini${selectedRow ? ' selected' : ''}`} key={key} data-appointment-id={appointment.id}>
-          <button className="appointment-select" disabled={!contactId || selecting} aria-pressed={Boolean(selectedRow)} onClick={() => onSelect(appointment)} aria-label={`Open notes for ${name}, ${time}`}>
-            <time dateTime={appointment.scheduled_at}>{time}</time><strong>{name}</strong>
+          <button className="appointment-select" disabled={!contactId || selecting} aria-pressed={selectedRow} onClick={() => onSelect(appointment)} aria-label={`Open notes for ${name}, ${time}`} title={!contactId ? 'No linked contact. Search for a contact to open their notes.' : undefined}>
+            <span className="appointment-summary"><time dateTime={appointment.scheduled_at}>{time}</time><strong>{name}</strong></span>
+            <span className={`appointment-status ${badge.tone}`}>{badge.text}</span>
+            <ChevronRight className="appointment-chevron" size={16} aria-hidden="true"/>
           </button>
-          <div className="appointment-mini-controls">
-            <span className="appointment-meta">{followUp ? <span className={`appointment-follow-up ${followUp}`}>{followUp === 'scheduled' ? 'Follow Up Scheduled' : 'Follow Up Needed'}</span> : appointmentIsClient(appointment) ? 'Client' : selectedRow ? 'Selected' : !contactId ? 'No linked contact' : ''}</span>
-            <select aria-label={`Disposition for ${name}, ${time}`} value={editable ? disposition : ''} disabled={!editable || Boolean(saving) || Boolean(catalogError) || catalogLoading} aria-busy={saving === key || catalogLoading} aria-invalid={Boolean(rowError)} onChange={event => void save(appointment, event.target.value)}>
-              <option value="">{!editable ? 'Calendar only' : 'No disposition'}</option>
-              {editable && disposition && !catalog.some(option => option.name === disposition) && <option value={disposition}>{disposition}</option>}
-              {editable && catalog.map(option => <option key={option.id} value={option.name}>{option.name}</option>)}
-            </select>
-          </div>
-          {!contactId && <small className="appointment-unlinked">Find a contact above to take notes.</small>}
-          {saving === key && <small role="status">Saving disposition…</small>}
-          {rowError && <p role="alert" className="assistant-error">{rowError}</p>}
         </article>;
       })}
-    </div>}
-    <small className="appointments-zone">Times in {viewerTimeZone().split('_').join(' ')} · Refreshes automatically</small>
+    </div>
   </section>;
+}
+
+export function AppointmentDispositionControl({ model, appointment }: {
+  model: WorkspaceAppointmentsModel; appointment: WorkspaceAppointment | null;
+}) {
+  const { catalog, catalogLoading, catalogError, saving, saveError } = model;
+  const key = appointment ? appointmentKey(appointment) : null;
+  const current = appointment ? model.rows.find(row => appointmentKey(row) === key && linkedAppointmentContact(row) === linkedAppointmentContact(appointment)) : null;
+  const editable = Boolean(current && linkedAppointmentContact(current) && Number.isSafeInteger(current.id) && Number(current.id) > 0);
+  const disposition = current?.contact?.last_call_disposition ?? '';
+  const rowError = saveError?.key === key ? saveError?.message : '';
+  return <div className="appointment-disposition-control">
+    <select className="appointment-disposition" aria-label="Disposition" value={disposition} disabled={!editable || Boolean(saving) || Boolean(catalogError) || catalogLoading} aria-busy={Boolean(saving) || catalogLoading} aria-invalid={Boolean(rowError)} onChange={event => { if (current) void model.saveDisposition(current, event.target.value); }}>
+      <option value="">No Disposition</option>
+      {disposition && !catalog.some(option => option.name === disposition) && <option value={disposition}>{disposition}</option>}
+      {catalog.map(option => <option key={option.id} value={option.name}>{option.name}</option>)}
+    </select>
+    {catalogError && <p className="assistant-error" role="alert">{catalogError} <button onClick={model.retryCatalog}>Retry dispositions</button></p>}
+    {rowError && <p role="alert" className="assistant-error">{rowError}</p>}
+    {model.notice && model.noticeKey === key && <p className="appointments-notice" role="status">{model.notice}</p>}
+  </div>;
 }
