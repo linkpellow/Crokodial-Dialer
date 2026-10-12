@@ -29,6 +29,26 @@ The staging script copies source code, insurance data and the required greeting 
 
 The platform assistant remains the default for uploaded plan documents, plan operations, support drafts and shared configured tools. Local research shows shared platform guidance but does not inject uploaded documents into the original local catalog. A platform quote-source-mismatch response offers a handoff to Insurance research while preserving the draft and selected product. Source catalog rates should be checked against current carrier documentation before use.
 
+## Workspace Notes
+
+Notes has its own persistent tab. Select an existing contact, edit their canonical notes, and record a connected Workspace call. The selected contact must match the actual call number and registered call identity. Recording mixes the call's existing local and remote audio; it does not open another microphone or stop call-owned tracks. Mute and hold are respected.
+
+Live AI drafts arrive as independently decodable audio segments are processed (normally after the first minute, plus provider processing time). Stopping or ending the call uploads remaining audio and adds one final summary to the contact's current notes. Revision checks preserve simultaneous typing and surface conflicts rather than overwriting notes. Keep recording for playback is initially selected; deleting saved audio keeps the notes.
+
+Capture remains mounted when switching tabs. Pending uploads are retained in memory for explicit retry, and normal window close/logout is blocked while audio or note edits remain unsaved. Unsaved audio cannot survive a process crash or forced session invalidation; completed server uploads remain in recording history, and incomplete sessions are labeled for review/cancellation. Raw capture is bounded to two hours/64 MiB per session, with at most 4 MiB per clip. The server caps retained audio at 512 MiB per owner and expires unfinished sessions after 24 hours. Completed retained audio remains available until deleted. No recordings start automatically.
+
+This feature requires platform migration `223_conversation_recording_sessions` and the matching recording-session routes, plus the existing transcription, summarization and audio-decoder configuration. The native app's microphone use description is packaged for macOS. OS microphone permission remains under the user's control.
+
+Recording verification commands:
+
+```sh
+npm run test:recording-bridge
+npm run build
+node tests/native-notes.test.cjs
+```
+
+The Notes fixture uses actual Electron MediaRecorder with synthetic WebAudio streams, isolated API responses and a disposable profile. It does not capture the microphone, make calls or invoke paid providers. For server integration, run `npx tsx scripts/verify-workspace-notes-http.ts` in the platform's `private-sms-app` directory; it uses real auth/tenant middleware and audio decoding with synthetic AI responses on a disposable database.
+
 ## Verification and launch
 
 ```sh

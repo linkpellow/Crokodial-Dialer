@@ -35,6 +35,8 @@ export interface LeadContext {
 }
 
 export interface CallLogData {
+  clientCallId: string;
+  telnyxCallId?: string;
   destinationNumber: string;
   callerNumber: string;
   direction: 'inbound' | 'outbound';
@@ -42,14 +44,14 @@ export interface CallLogData {
 }
 
 export interface DialerEngineOptions {
-  onCallLog?: (data: CallLogData) => void;
+  onCallLog?: (data: CallLogData) => Promise<{ clientCallId: string } | undefined>;
 }
 
 export interface DialerEngineConfig {
   login_token?: string;
   login?: string;
   password?: string;
-  onCallLog?: (data: CallLogData) => void;
+  onCallLog?: (data: CallLogData) => Promise<{ clientCallId: string } | undefined>;
 }
 
 export interface StartCallOptions {
@@ -144,7 +146,11 @@ export class DialerEngine extends EventEmitter {
   private _currentCall: Call | null = null;
   private _isMuted = false;
   private _isOnHold = false;
-  private _onCallLog: ((data: CallLogData) => void) | null = null;
+  private _onCallLog: DialerEngineOptions['onCallLog'] | null = null;
+  private _activeLeadContext: LeadContext | null = null;
+  private _registrationCallId: string | null = null;
+  private _loggingCallId: string | null = null;
+  private _mediaAttempt = 0;
   private _pendingCallLeadContext: LeadContext | null = null;
   private _currentLocalStream: MediaStream | null = null;
   private _lastConfig: DialerEngineConfig | null = null;
@@ -169,6 +175,10 @@ export class DialerEngine extends EventEmitter {
       call.direction === 'inbound' &&
       (call.state === 'ringing' || call.state === 'Ringing')
     ) {
+      if (this._currentCall?.id !== call.id) {
+        this._activeLeadContext = null; this._pendingCallLeadContext = null;
+        this._registrationCallId = null; this._loggingCallId = null;
+      }
       this._currentCall = call;
       this.setUIState('ringing');
       this.emit('incomingCall', {
@@ -200,25 +210,7 @@ export class DialerEngine extends EventEmitter {
         this.emit('remoteStream', { stream: call.remoteStream } as RemoteStreamPayload);
       }
 
-      // Call log when transitioning to active
-      if (nextUIState === 'in_call' && this._onCallLog) {
-        const direction = call.direction === 'inbound' ? 'inbound' : 'outbound';
-        const destinationNumber =
-          direction === 'inbound'
-            ? (call.options?.callerNumber ?? '') // Our number they reached (if available)
-            : (call.options?.destinationNumber ?? '');
-        const callerNumber =
-          direction === 'inbound'
-            ? (call.options?.remoteCallerNumber ?? '')
-            : (call.options?.callerNumber ?? '');
-        this._onCallLog({
-          destinationNumber,
-          callerNumber,
-          direction,
-          leadContext: this._pendingCallLeadContext ?? undefined,
-        });
-        this._pendingCallLeadContext = null;
-      }
+      if (nextUIState === 'in_call') void this.registerCurrentCall().catch(() => undefined);
 
       // Sync mute/hold from call
       this._isMuted = call.isAudioMuted ?? this._isMuted;
@@ -244,6 +236,44 @@ export class DialerEngine extends EventEmitter {
       this.emitStatusUpdate();
     }
   };
+
+  /** Stable call identity and media used by the native notes recorder. */
+  getRecordingCallSnapshot() {
+    const call = this._currentCall;
+    if (!call) return null;
+    return {
+      callId: call.id, registeredCallId: this._registrationCallId, state: this._uiState,
+      remoteNumber: call.direction === 'inbound' ? call.options?.remoteCallerNumber ?? '' : call.options?.destinationNumber ?? '',
+      contactId: this._activeLeadContext?.leadId ? Number(this._activeLeadContext.leadId) : undefined,
+      localStream: call.localStream ?? null, remoteStream: call.remoteStream ?? null,
+      isMuted: this._isMuted, isOnHold: this._isOnHold,
+    };
+  }
+
+  async associateRecordingContact(contact: { id: number; e164: string; name: string }): Promise<void> {
+    const snapshot = this.getRecordingCallSnapshot();
+    const normalize = (value: string) => { const digits = value.replace(/\D/g, ''); return digits.length === 10 ? '1' + digits : digits; };
+    if (!snapshot || normalize(snapshot.remoteNumber) !== normalize(contact.e164) || (snapshot.contactId && snapshot.contactId !== contact.id)) throw new Error('The selected contact does not match this call.');
+    this._activeLeadContext = { leadId: String(contact.id), leadPhone: contact.e164, leadName: contact.name };
+    await this.registerCurrentCall();
+    if (!this._registrationCallId) throw new Error('The call has not been registered. Wait for calling services and retry.');
+  }
+
+  private async registerCurrentCall(): Promise<void> {
+    const call = this._currentCall;
+    if (!call || this._uiState !== 'in_call' || !this._onCallLog || !this._activeLeadContext?.leadId || this._registrationCallId || this._loggingCallId === call.id) return;
+    this._loggingCallId = call.id;
+    const direction = call.direction === 'inbound' ? 'inbound' : 'outbound';
+    try {
+      const result = await this._onCallLog({
+        clientCallId: call.id, telnyxCallId: call.id,
+        destinationNumber: direction === 'inbound' ? call.options?.callerNumber ?? '' : call.options?.destinationNumber ?? '',
+        callerNumber: direction === 'inbound' ? call.options?.remoteCallerNumber ?? '' : call.options?.callerNumber ?? '',
+        direction, leadContext: this._activeLeadContext,
+      });
+      if (this._currentCall?.id === call.id && result?.clientCallId) this._registrationCallId = result.clientCallId;
+    } finally { if (this._loggingCallId === call.id) this._loggingCallId = null; }
+  }
 
   get connectionStatus(): ConnectionStatus {
     return this._connectionStatus;
@@ -484,10 +514,14 @@ export class DialerEngine extends EventEmitter {
     this.emitStatusUpdate();
 
     this._pendingCallLeadContext = leadContext ?? null;
+    this._activeLeadContext = leadContext ? { ...leadContext } : null;
+    this._registrationCallId = null; this._loggingCallId = null;
+    const attempt = ++this._mediaAttempt;
 
     let localStream: MediaStream;
     try {
       localStream = await acquireLocalStream();
+      if (attempt !== this._mediaAttempt) { localStream.getTracks().forEach(track => track.stop()); return; }
       this._currentLocalStream = localStream;
     } catch (err) {
       const message = err instanceof Error ? err.message : (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string' ? (err as { message: string }).message : String(err));
@@ -518,6 +552,7 @@ export class DialerEngine extends EventEmitter {
    * Sets uiState to 'ended' only when a call existed (for disposition modal); otherwise 'idle'.
    */
   private cleanupCall(): void {
+    ++this._mediaAttempt;
     const hadCall = !!this._currentCall;
     if (this._currentLocalStream) {
       this._currentLocalStream.getTracks().forEach((t) => t.stop());
@@ -561,16 +596,20 @@ export class DialerEngine extends EventEmitter {
     const state = (this._currentCall.state || '').toLowerCase();
     if (state !== 'ringing' && state !== 'answering') return;
 
+    const call = this._currentCall;
+    const attempt = ++this._mediaAttempt;
     try {
       const stream = await acquireLocalStream();
+      if (attempt !== this._mediaAttempt || this._currentCall !== call || !['ringing', 'answering'].includes(call.state.toLowerCase())) { stream.getTracks().forEach(track => track.stop()); return; }
       this._currentLocalStream = stream;
+      call.options.localStream = stream;
     } catch (micError) {
       const message = micError instanceof Error ? micError.message : (micError && typeof micError === 'object' && 'message' in micError && typeof (micError as { message: unknown }).message === 'string' ? (micError as { message: string }).message : String(micError));
       this.emit('permissionError', { message: typeof message === 'string' && message !== '[object Object]' ? message : 'Permission denied' } as PermissionErrorPayload);
       return;
     }
 
-    await this._currentCall.answer();
+    await call.answer();
   }
 
   /**

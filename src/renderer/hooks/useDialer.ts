@@ -138,7 +138,7 @@ export function useDialer(): {
     if (!engineRef.current) {
       engineRef.current = new DialerEngine({
         onCallLog: (data) => {
-          logCallStart({ ...data, deviceId: deviceId.current });
+          return logCallStart({ ...data, deviceId: deviceId.current });
         },
       });
     }
@@ -176,7 +176,12 @@ export function useDialer(): {
         ...prev,
         uiState: payload.uiState,
         callDirection: dir,
+        ...(['idle', 'ended'].includes(payload.uiState) ? { remoteStream: null } : {}),
       }));
+    };
+
+    const onIncomingCall = (payload: { callerNumber?: string }) => {
+      setState(previous => ({ ...previous, phoneNumber: payload.callerNumber ?? '', leadContext: null, remoteStream: null }));
     };
 
     const onRemoteStream = (payload: { stream: MediaStream }) => {
@@ -193,6 +198,7 @@ export function useDialer(): {
       }));
     };
 
+    engine.on('incomingCall', onIncomingCall);
     engine.on('statusUpdate', onStatusUpdate);
     engine.on('callStateChange', onCallStateChange);
     engine.on('remoteStream', onRemoteStream);
@@ -200,6 +206,7 @@ export function useDialer(): {
     engine.on('connectionError', onConnectionError);
 
     return () => {
+      engine.off('incomingCall', onIncomingCall);
       engine.off('statusUpdate', onStatusUpdate);
       engine.off('callStateChange', onCallStateChange);
       engine.off('remoteStream', onRemoteStream);
@@ -263,7 +270,7 @@ export function useDialer(): {
   }, []);
 
   const setPhoneNumber = useCallback((value: string) => {
-    setState((prev) => ({ ...prev, phoneNumber: value }));
+    setState((prev) => ({ ...prev, phoneNumber: value, leadContext: prev.leadContext?.leadPhone?.replace(/\D/g, '') === value.replace(/\D/g, '') ? prev.leadContext : null }));
   }, []);
 
   const setSelectedCallerNumber = useCallback((value: string) => {
@@ -317,17 +324,20 @@ export function useDialer(): {
     const dest = phoneNumber.trim();
     if (!dest) return;
 
+    const digits = (value: string) => { const raw = value.replace(/\D/g, ''); return raw.length === 10 ? '1' + raw : raw; };
+    const matchingLead = leadContext?.leadPhone && digits(leadContext.leadPhone) === digits(dest) ? leadContext : undefined;
+    if (!matchingLead) setState(previous => ({ ...previous, leadContext: null }));
     const callerNumber = resolveCallerNumber(
       selectedCallerNumber === 'auto' ? 'auto' : selectedCallerNumber,
       selectedCallerNumber,
       availablePhoneNumbers,
       userAssignments,
-      leadContext ?? undefined
+      matchingLead
     );
 
     if (!callerNumber) return;
 
-    engine.startCall(dest, callerNumber, undefined, leadContext ?? undefined);
+    engine.startCall(dest, callerNumber, undefined, matchingLead);
   }, []);
 
   const startCallWithLead = useCallback((destinationNumber: string, leadContext: LeadContext) => {

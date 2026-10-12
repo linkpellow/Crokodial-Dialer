@@ -99,3 +99,38 @@
 .assistant-plan-context button { color: #d6f9b2; text-decoration: underline; }
 .assistant-plan-link { color: #c4ed9b; text-decoration: underline; text-decoration-color: #a8e06366; text-underline-offset: 3px; text-align: left; }
 .assistant-research-handoff { border: 1px solid #c9ed8b44; border-radius: 6px; padding: 6px 8px; margin-top: 10px; color: #d2f4ae; font-size: 10px; }
+
+/* Native contact notes stay mounted beside the live dialer. */
+.notes-workspace { height: 100%; display: flex; flex-direction: column; background: radial-gradient(ellipse at 90% 0, #34512566, transparent 45%), #152319; color: #e7f1e1; }
+.notes-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: #476044 transparent; }
+.notes-label { display: block; color: #c8dbbd; font-size: 10px; margin: 9px 0 5px; }
+.notes-workspace input:not([type=checkbox]), .notes-workspace textarea { width: 100%; background: #203025; border: 1px solid #a8e06330; border-radius: 7px; padding: 8px; color: #eef7e8; font-size: 11px; -webkit-app-region: no-drag; }
+.notes-workspace textarea { min-height: 155px; resize: vertical; line-height: 1.6; }
+.notes-workspace button { font-size: 10px; -webkit-app-region: no-drag; }
+.notes-workspace button:disabled { opacity: .4; cursor: default; }
+.notes-contact { display: flex; align-items: center; justify-content: space-between; margin: 15px 0 7px; }
+.notes-contact strong { display: block; font-size: 13px; }
+.notes-contact small, .notes-muted { display: block; font-size: 10px; line-height: 1.6; color: #b5c8ac; }
+.notes-save, .notes-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; }
+.notes-save { margin: 5px 0 13px; color: #c4dbb4; }
+.notes-save button, .notes-card button:not(.notes-primary), .notes-link { color: #c7ecac; text-decoration: underline; text-underline-offset: 3px; }
+.notes-card { padding: 11px; background: #ffffff05; border: 1px solid #ffffff14; border-radius: 9px; margin: 12px 0; font-size: 11px; }
+.notes-card h2 { font-size: 12px; font-weight: 600; margin-bottom: 7px; }
+.notes-checkbox { display: flex; gap: 7px; align-items: center; font-size: 10px; margin: 10px 0; }
+.notes-checkbox input { accent-color: #a8e063; }
+.notes-primary { display: flex; gap: 7px; align-items: center; justify-content: center; width: 100%; background: #b8e888; color: #18310d; padding: 9px; border-radius: 7px; margin: 8px 0; }
+.recording-stop { background: #e9bf9c; }
+.notes-results { margin: 7px 0; border: 1px solid #a8e06322; border-radius: 7px; overflow: hidden; }
+.notes-results button { width: 100%; text-align: left; padding: 8px; border-bottom: 1px solid #ffffff10; }
+.notes-results button:hover { background: #a8e06315; }
+.notes-results strong, .notes-results span { display: block; font-size: 11px; }
+.notes-results span { color: #abc39e; font-size: 9px; margin-top: 3px; }
+.notes-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.7; user-select: text; }
+.notes-segment { display: flex; flex-wrap: wrap; gap: 7px; padding: 7px 0; border-top: 1px solid #ffffff10; font-size: 9px; }
+.notes-segment small { width: 100%; color: #e8c59e; }
+.notes-card audio { width: 100%; height: 35px; margin: 9px 0; }
+.notes-history { display: block; text-align: left; width: 100%; padding: 8px 0; border-bottom: 1px solid #ffffff10; }
+.notes-history span, .notes-history small { display: block; }
+.notes-history small { margin-top: 4px; color: #b5c8ac; text-decoration: none; }
+.native-recording-banner { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 10px; background: #483528; color: #f2d7b9; font-size: 9px; }
+.native-recording-banner button { text-decoration: underline; }

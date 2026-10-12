@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json",
     "stage:insurance": "node scripts/stage-compass.mjs",
     "test:native": "npm run build && node tests/native-workspace.test.cjs",
-    "test:insurance": "node --test tests/compass-worker.test.cjs"
+    "test:insurance": "node --test tests/compass-worker.test.cjs",
+    "test:recording-bridge": "npm run build:main && node --test tests/recording-bridge.test.cjs"
   },
   "keywords": [
     "dialer",
@@ -62,6 +63,9 @@
       "output": "release"
     },
     "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Crokodial Workspace uses your microphone for calls and recordings you start in Notes."
+      },
       "icon": "public/power-dialer.png",
       "category": "public.app-category.business",
       "target": "dmg"

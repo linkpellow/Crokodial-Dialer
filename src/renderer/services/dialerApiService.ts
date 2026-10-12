@@ -34,7 +34,7 @@ function buildUrl(path: string): string {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function getAuthHeaders(): Record<string, string> {
+export function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'x-crokodial-contract-version': '2026-02-26.1', ...DESKTOP_CLIENT_HEADERS };
   if (token) {
@@ -238,6 +238,8 @@ export interface PhoneNumbersResponse {
 }
 
 export interface LogCallPayload {
+  clientCallId?: string;
+  telnyxCallId?: string;
   deviceId?: string;
   destinationNumber: string;
   callerNumber: string;
@@ -386,7 +388,7 @@ export async function fetchFilterOptions(): Promise<FilterOptionsResponse> {
   };
 }
 
-export async function logCallStart(payload: LogCallPayload): Promise<void> {
+export async function logCallStart(payload: LogCallPayload): Promise<{ clientCallId: string } | undefined> {
   // Backend requires contactId; manual dial has no lead context → skip to avoid 400
   const contactId = payload.leadContext?.leadId;
   if (!contactId) return;
@@ -397,11 +399,15 @@ export async function logCallStart(payload: LogCallPayload): Promise<void> {
     const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, phoneNumber: payload.leadContext?.leadPhone ?? payload.destinationNumber }),
     });
     if (!res.ok) {
       console.warn('[dialerApi] POST /api/dialer/call failed:', res.status);
+      return;
     }
+    const body = await res.json();
+    const result = body?.data ?? body;
+    if (typeof result?.clientCallId === 'string') return { clientCallId: result.clientCallId };
   } catch (err) {
     console.warn('[dialerApi] POST /api/dialer/call error:', err);
   }

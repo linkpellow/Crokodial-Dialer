@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { checkAuth, getStoredUser, logout, UNAUTHORIZED_EVENT, REQUIRES_TENANT_EVENT, type LoginUser } from '@/renderer/services/dialerApiService';
 import { LoginScreen } from '@/renderer/components/LoginScreen';
+import { nativeWorkSessionNotice } from './services/nativeWorkGuard';
 import { DialerShell } from '@/renderer/components/DialerShell';
 
 function App() {
@@ -36,7 +37,7 @@ function App() {
   }, [authAttempt]);
 
   useEffect(() => {
-    const handler = () => setUser(null);
+    const handler = () => { const notice = nativeWorkSessionNotice(); if (notice) setRequiresOrgMessage(notice); setUser(null); };
     window.addEventListener(UNAUTHORIZED_EVENT, handler);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler);
   }, []);

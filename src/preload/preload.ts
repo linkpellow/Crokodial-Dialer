@@ -7,6 +7,8 @@ interface ApiFetchOptions {
 }
 
 contextBridge.exposeInMainWorld('dialer', {
+  uploadRecordingSegment: (payload: unknown) => ipcRenderer.invoke('recording-upload-segment', payload),
+  downloadRecordingAudio: (payload: unknown) => ipcRenderer.invoke('recording-download-audio', payload),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   openBrochure: (planId: string) => ipcRenderer.invoke('compass-brochure', planId),
   clearAssistant: () => ipcRenderer.invoke('compass-clear'),

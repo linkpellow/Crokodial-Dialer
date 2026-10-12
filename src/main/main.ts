@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, shell, type IpcMainInvokeEvent } f
 import { compassRequest, openCompassBrochure, stopCompass } from './compass';
 import path from 'path';
 import fs from 'fs';
+import { allowWorkspaceMicrophone, createRecordingBridge } from './recordingBridge';
 
 // Never reuse or modify the installed Dialer's profile.
 app.setName('Crokodial Workspace');
@@ -176,11 +177,17 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+  const workspaceContents = mainWindow.webContents;
+  workspaceContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    allowWorkspaceMicrophone(contents === mainWindow?.webContents, workspaceContents.getURL(), permission, details));
+  workspaceContents.session.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(allowWorkspaceMicrophone(contents === mainWindow?.webContents, workspaceContents.getURL(), permission, details)));
   mainWindow.setAspectRatio(IPHONE_ASPECT_RATIO);
 
   mainWindow.on('ready-to-show', () => {
@@ -221,6 +228,16 @@ interface ApiFetchPayload {
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Untrusted request.');
 }
+
+const recordingBridge = createRecordingBridge(PLATFORM_ORIGIN);
+ipcMain.handle('recording-upload-segment', (event, payload: unknown) => {
+  assertTrustedSender(event);
+  return recordingBridge.upload(payload);
+});
+ipcMain.handle('recording-download-audio', (event, payload: unknown) => {
+  assertTrustedSender(event);
+  return recordingBridge.download(payload);
+});
 
 ipcMain.handle('api-fetch', async (event, payload: ApiFetchPayload) => {
   assertTrustedSender(event);
