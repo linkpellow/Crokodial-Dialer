@@ -38,3 +38,39 @@ test('active notifications and hold transitions cannot duplicate a registered ca
  const call={id:'stable-call',state:'active',direction:'inbound',isAudioMuted:false,options:{remoteCallerNumber:'+12125550123'}};engine._currentCall=call;engine._uiState='in_call';await engine.associateRecordingContact({id:11,e164:'+12125550123',name:'Synthetic'});
  engine.handleNotification({type:'callUpdate',call});engine.handleNotification({type:'callUpdate',call});await Promise.resolve();assert.equal(registrations,1);assert.equal(engine.getRecordingCallSnapshot().registeredCallId,'stable-call');
 });
+test('SDK call creation failure releases acquired microphone and allows a clean retry',async()=>{
+ const oldNavigator=global.navigator;let stopped=0,attempts=0,registrations=0;const errors=[],states=[];
+ const streams=Array.from({length:2},()=>({getAudioTracks:()=>[{}],getTracks:()=>[{stop:()=>stopped++}]}));
+ Object.defineProperty(global,'navigator',{value:{mediaDevices:{getUserMedia:async()=>streams[attempts]}},configurable:true});
+ const engine=new DialerEngine({onCallLog:async data=>{registrations++;return{clientCallId:data.clientCallId};}});
+ engine.client={newCall:options=>{assert.equal(options.localStream,streams[attempts]);if(attempts++===0)throw Error('Synthetic SDK rejection');return{id:'retry-call',state:'new',options};}};
+ engine.on('permissionError',value=>errors.push(value.message));engine.on('callStateChange',value=>states.push(value.uiState));
+ try{
+  await engine.startCall('+12125550123','+12125550999',undefined,{leadId:'11',leadPhone:'+12125550123'});
+  assert.deepEqual(errors,['Synthetic SDK rejection']);assert.equal(stopped,1);assert.equal(registrations,0,'Rejected SDK creation must never register a call');
+  assert.equal(engine.uiState,'idle');assert.equal(engine._currentCall,null);assert.equal(engine._currentLocalStream,null);
+  assert.deepEqual(states,['dialing','idle']);
+  await engine.startCall('+12125550123','+12125550999',undefined,{leadId:'11',leadPhone:'+12125550123'});
+  assert.equal(engine._currentCall.id,'retry-call');assert.equal(engine._currentLocalStream,streams[1]);assert.equal(stopped,1);
+  engine.teardown();assert.equal(stopped,2);
+ }finally{Object.defineProperty(global,'navigator',{value:oldNavigator,configurable:true});}
+});
+test('known outbound contact registers during dialing exactly once across later SDK state changes',async()=>{
+ const oldNavigator=global.navigator, pending=deferred(), logs=[];let stopped=0;
+ const stream={getAudioTracks:()=>[{}],getTracks:()=>[{stop:()=>stopped++}]};
+ Object.defineProperty(global,'navigator',{value:{mediaDevices:{getUserMedia:async()=>stream}},configurable:true});
+ const engine=new DialerEngine({onCallLog:async data=>{logs.push(data);return pending.promise;}});
+ engine.client={newCall:options=>({id:'outbound-known',direction:'outbound',state:'new',options})};
+ try{
+  await engine.startCall('+12125550123','+12125550999',undefined,{leadId:'11',leadName:'Synthetic',leadPhone:'+12125550123'});
+  assert.equal(engine.uiState,'dialing');assert.equal(logs.length,1,'Unanswered outgoing calls must be recorded before connection');
+  assert.equal(logs[0].direction,'outbound');assert.equal(logs[0].leadContext.leadId,'11');assert.equal(logs[0].destinationNumber,'+12125550123');
+  const call=engine._currentCall;
+  for(const state of ['ringing','active','held','active']){call.state=state;engine.handleNotification({type:'callUpdate',call});}
+  assert.equal(logs.length,1,'In-flight registration must remain unique through active/hold events');
+  pending.resolve({clientCallId:'outbound-known'});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(engine.getRecordingCallSnapshot().registeredCallId,'outbound-known');
+  engine.handleNotification({type:'callUpdate',call});await Promise.resolve();assert.equal(logs.length,1);
+  engine.teardown();assert.equal(stopped,1);
+ }finally{Object.defineProperty(global,'navigator',{value:oldNavigator,configurable:true});}
+});

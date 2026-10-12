@@ -75,6 +75,8 @@ export interface UseDialerState {
   keypadColor: string;
   outboundRingSound: string | null;
   callDirection: 'inbound' | 'outbound' | null;
+  connectedAt: number | null;
+  callOrigin: 'dialer' | 'contact';
   availablePhoneNumbers: string[];
   userAssignments: string[];
   leadContext: LeadContext | null;
@@ -94,7 +96,7 @@ export interface UseDialerActions {
   retryConnection: () => void;
   startCall: () => void;
   /** Start call with explicit destination and leadContext (for auto-dialer). */
-  startCallWithLead: (destinationNumber: string, leadContext: LeadContext) => void;
+  startCallWithLead: (destinationNumber: string, leadContext: LeadContext, origin?: 'dialer' | 'contact') => Promise<void>;
   hangupCall: () => void;
   answerCall: () => void;
   toggleMute: () => void;
@@ -123,6 +125,8 @@ export function useDialer(): {
     keypadColor: saved.keypadColor ?? DEFAULT_SETTINGS.keypadColor,
     outboundRingSound: saved.outboundRingSound ?? DEFAULT_SETTINGS.outboundRingSound,
     callDirection: null,
+    connectedAt: null,
+    callOrigin: 'dialer',
     availablePhoneNumbers: DEFAULT_PHONE_NUMBERS,
     userAssignments: [],
     leadContext: null,
@@ -155,6 +159,7 @@ export function useDialer(): {
         ...prev,
         connectionStatus: payload.connectionStatus,
         uiState: payload.uiState,
+        connectedAt: ['in_call', 'held'].includes(payload.uiState) ? prev.connectedAt ?? Date.now() : null,
         isMuted: payload.isMuted,
         isOnHold: payload.isOnHold,
         connectionErrorMessage: payload.connectionErrorMessage !== undefined ? payload.connectionErrorMessage : prev.connectionErrorMessage,
@@ -175,13 +180,14 @@ export function useDialer(): {
       setState((prev) => ({
         ...prev,
         uiState: payload.uiState,
+        connectedAt: ['in_call', 'held'].includes(payload.uiState) ? prev.connectedAt ?? Date.now() : null,
         callDirection: dir,
         ...(['idle', 'ended'].includes(payload.uiState) ? { remoteStream: null } : {}),
       }));
     };
 
     const onIncomingCall = (payload: { callerNumber?: string }) => {
-      setState(previous => ({ ...previous, phoneNumber: payload.callerNumber ?? '', leadContext: null, remoteStream: null }));
+      setState(previous => ({ ...previous, phoneNumber: payload.callerNumber ?? '', leadContext: null, remoteStream: null, callOrigin: 'dialer' }));
     };
 
     const onRemoteStream = (payload: { stream: MediaStream }) => {
@@ -337,14 +343,18 @@ export function useDialer(): {
 
     if (!callerNumber) return;
 
-    engine.startCall(dest, callerNumber, undefined, matchingLead);
+    setState(previous => ({ ...previous, callOrigin: 'dialer' }));
+    void engine.startCall(dest, callerNumber, undefined, matchingLead);
   }, []);
 
-  const startCallWithLead = useCallback((destinationNumber: string, leadContext: LeadContext) => {
+  const startCallWithLead = useCallback(async (destinationNumber: string, leadContext: LeadContext, origin: 'dialer' | 'contact' = 'dialer') => {
     const engine = engineRef.current;
-    if (!engine) return;
+    const fail = (message: string) => setState(previous => ({ ...previous, permissionError: message }));
+    if (!engine || stateRef.current.connectionStatus !== 'registered') { fail('Calling is not connected. Open the dialer to reconnect.'); return; }
+    // Check the engine synchronously: a second click can arrive before React renders dialing.
+    if (['dialing', 'ringing', 'in_call', 'held'].includes(engine.uiState)) return;
     const dest = destinationNumber.trim();
-    if (!dest) return;
+    if (!/^\+?[1-9]\d{6,14}$/.test(dest)) { fail('This contact needs a valid phone number before calling.'); return; }
 
     const {
       selectedCallerNumber,
@@ -358,14 +368,17 @@ export function useDialer(): {
       userAssignments,
       leadContext
     );
-    if (!callerNumber) return;
+    if (!/^\+?[1-9]\d{6,14}$/.test(callerNumber) || !availablePhoneNumbers.includes(callerNumber)) { fail('No assigned caller number is available. Open the dialer to review calling settings.'); return; }
 
     setState((prev) => ({
       ...prev,
       phoneNumber: dest,
       leadContext,
+      callOrigin: origin,
+      permissionError: null,
     }));
-    engine.startCall(dest, callerNumber, undefined, leadContext);
+    try { await engine.startCall(dest, callerNumber, undefined, leadContext); }
+    catch (error) { fail(error instanceof Error ? error.message : 'Unable to start this call. Please retry.'); }
   }, []);
 
   const hangupCall = useCallback(() => {

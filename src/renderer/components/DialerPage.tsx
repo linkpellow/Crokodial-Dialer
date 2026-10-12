@@ -1077,7 +1077,7 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
       </div>
 
       <DispositionModal
-        open={state.uiState === 'ended' && !!state.leadContext?.leadId}
+        open={state.uiState === 'ended' && state.callOrigin !== 'contact' && !!state.leadContext?.leadId}
         contactId={state.leadContext?.leadId ?? null}
         onSave={handleDispositionSave}
         onSkip={handleDispositionSkip}

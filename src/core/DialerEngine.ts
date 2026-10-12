@@ -261,7 +261,7 @@ export class DialerEngine extends EventEmitter {
 
   private async registerCurrentCall(): Promise<void> {
     const call = this._currentCall;
-    if (!call || this._uiState !== 'in_call' || !this._onCallLog || !this._activeLeadContext?.leadId || this._registrationCallId || this._loggingCallId === call.id) return;
+    if (!call || !['dialing', 'ringing', 'in_call', 'held'].includes(this._uiState) || !this._onCallLog || !this._activeLeadContext?.leadId || this._registrationCallId || this._loggingCallId === call.id) return;
     this._loggingCallId = call.id;
     const direction = call.direction === 'inbound' ? 'inbound' : 'outbound';
     try {
@@ -535,16 +535,23 @@ export class DialerEngine extends EventEmitter {
       return;
     }
 
-    const call = this.client.newCall({
-      destinationNumber,
-      callerNumber,
-      callerName,
-      localStream,
-      audio: true,
-      video: false,
-    });
-
-    this._currentCall = call;
+    try {
+      this._currentCall = this.client.newCall({
+        destinationNumber,
+        callerNumber,
+        callerName,
+        localStream,
+        audio: true,
+        video: false,
+      });
+      // Register the actual SDK call before it is answered so missed attempts remain in history.
+      void this.registerCurrentCall().catch(() => undefined);
+    } catch (error) {
+      // A rejected SDK call must release its microphone and leave the Call button usable.
+      this.cleanupCall();
+      const message = error instanceof Error ? error.message : 'Unable to start this call. Please retry.';
+      this.emit('permissionError', { message } as PermissionErrorPayload);
+    }
   }
 
   /**

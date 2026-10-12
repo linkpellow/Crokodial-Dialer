@@ -1,0 +1,47 @@
+.workspace-contacts, .contact-history { display: flex; flex-direction: column; flex: 1; min-height: 0; color: #e7f1e1; overflow: hidden; }
+.workspace-contacts { height: 100%; padding: 10px; background: radial-gradient(ellipse at 90% 0, #34512555, transparent 48%), #10291a; }
+.workspace-contact-search { flex-shrink: 0; -webkit-app-region: drag; }
+.workspace-contact-search-heading, .contact-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.workspace-contact-search label, .contact-history-heading h2 { font-size: 12px; font-weight: 500; margin: 0; }
+.workspace-contact-search input { width: 100%; background: #ffffff04; border: 1px solid #a8e06340; border-radius: 6px; padding: 8px 10px; color: #eef7e8; font-size: 12px; -webkit-app-region: no-drag; }
+.workspace-contact-search input::placeholder { color: #a5b6a0; }
+.workspace-list-filters { display: flex; flex-shrink: 0; gap: 6px; padding: 10px 0 9px; border-bottom: 1px solid #ffffff0c; }
+.workspace-list-filters button { flex: 1; min-width: 0; border: 1px solid #a8e06328; border-radius: 7px; padding: 6px 4px; font-size: 11px; color: #d8e5ce; background: #091f13aa; -webkit-app-region: no-drag; }
+.workspace-list-filters button[aria-selected=true] { border-color: #9bd23185; color: #d2f278; background: #66871925; }
+.workspace-contacts-list, .contact-history-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #476044 transparent; }
+.workspace-contact-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 61px; padding: 8px 2px; border-bottom: 1px solid #ffffff12; text-align: left; color: inherit; -webkit-app-region: no-drag; }
+.workspace-contact-row.selected { background: #99d95e0c; }
+.workspace-contact-row:hover { background: #99d95e0a; }
+.workspace-contact-row:disabled { opacity: .6; }
+.workspace-contact-avatar { flex: 0 0 33px; width: 33px; height: 33px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #557a2944, #18361a); border: 1px solid #88bb4566; font-size: 12px; color: #edf6e5; }
+.workspace-contact-summary { flex: 1; min-width: 0; }
+.workspace-contact-summary strong { display: block; font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.workspace-contact-summary small { display: block; margin-top: 3px; color: #b6c8ae; font-size: 10px; font-variant-numeric: tabular-nums; }
+.workspace-contact-badge { flex: 0 1 auto; max-width: 25%; padding: 3px 7px; font-size: 10px; line-height: 1.2; border-radius: 999px; border: 1px solid #bd912466; color: #eed582; background: #9e6b0822; text-align: center; }
+.workspace-contact-badge.client { border-color: #85b83866; color: #c7f372; background: #61961522; }
+.workspace-contact-chevron { flex-shrink: 0; color: #d0deca; }
+.workspace-list-message { margin: 10px 2px; font-size: 11px; line-height: 1.5; color: #b7c8ae; }
+.workspace-list-error { flex-shrink: 0; margin: 8px 2px; font-size: 11px; line-height: 1.5; color: #efc19a; }
+.workspace-list-error button { text-decoration: underline; margin-left: 5px; }
+.workspace-load-more { display: block; width: 100%; text-align: center; padding: 11px 4px; font-size: 11px; color: #c8ec88; -webkit-app-region: no-drag; }
+.workspace-list-sentinel { height: 1px; flex-shrink: 0; }
+.contact-history { padding: 0; }
+.contact-history .workspace-list-filters { padding-top: 3px; }
+.contact-history-list { padding-top: 7px; }
+.contact-history-day { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; color: #c1cfba; font-size: 11px; font-weight: 500; }
+.contact-history-day::after { content: ''; height: 1px; flex: 1; background: #ffffff10; }
+.contact-history-event { display: flex; align-items: stretch; gap: 9px; min-height: 58px; position: relative; }
+.contact-history-event::before { content: ''; position: absolute; top: 32px; bottom: 1px; left: 15px; width: 1px; background: #72936355; }
+.contact-history-icon { z-index: 1; flex-shrink: 0; margin-top: 5px; height: 31px; width: 31px; border: 1px solid #78ad3670; border-radius: 50%; background: #143d20; color: #bdf65f; display: flex; align-items: center; justify-content: center; }
+.contact-history-event.appointment .contact-history-icon { border-color: #6cacd68c; color: #a7d2f4; background: #102c39; }
+.contact-history-event.missed .contact-history-icon { border-color: #db634a80; color: #ff8e76; background: #3d241d; }
+.contact-history-event-body { flex: 1; min-width: 0; border-bottom: 1px solid #ffffff10; }
+.contact-history-event-toggle { width: 100%; display: flex; align-items: center; gap: 6px; padding: 7px 0 11px; text-align: left; -webkit-app-region: no-drag; }
+.contact-history-event-toggle > span { flex: 1; min-width: 0; }
+.contact-history-event-toggle strong { display: block; font-size: 12px; line-height: 1.35; font-weight: 550; overflow-wrap: anywhere; }
+.contact-history-event-toggle small { display: block; margin-top: 3px; color: #bbcbb3; font-size: 10px; line-height: 1.4; }
+.contact-history-event-toggle svg { flex-shrink: 0; color: #d0deca; }
+.contact-history-event-toggle svg.expanded { transform: rotate(90deg); }
+.contact-history-event-detail { font-size: 10px; line-height: 1.5; color: #afc4a4; padding: 0 0 8px; }
+.contact-history-event-detail p { margin-top: 3px; }
+.workspace-contacts button:focus-visible, .workspace-contact-search input:focus-visible, .workspace-contacts-list:focus-visible, .contact-history button:focus-visible, .contact-history-list:focus-visible { outline: 1px solid #b2ee65; outline-offset: -2px; }

@@ -13,6 +13,7 @@ const {hideNativeWindows}=require('./fixtures/hide-native-windows.cjs');
    ipcMain.removeHandler('api-fetch');ipcMain.handle('api-fetch',async(_,payload)=>{
     const p=new URL(payload.url).pathname,b=payload.body?JSON.parse(payload.body):{};let data={},status=200;
     if(p==='/api/auth/me')data={id:11,name:'Native Notes fixture',tenant_id:9};
+    else if(p==='/api/contacts/workspace')data={contacts:[{id:11,name:'Synthetic Contact',firstName:'Synthetic',lastName:'Contact',phone:'+12125550123',clientStatus:null}],hasMore:false,nextCursor:null};
     else if(p==='/api/contacts')data={contacts:[{id:11,firstName:'Synthetic',lastName:'Contact',e164:'+12125550123'}],pagination:{}};
     else if(p==='/api/appointments')data=[];
     else if(p==='/api/dialer/dispositions')data={dispositions:[{id:1,name:'Appointment'}]};
@@ -29,7 +30,7 @@ const {hideNativeWindows}=require('./fixtures/hide-native-windows.cjs');
   await page.evaluate(()=>{localStorage.setItem('crokodial_auth_token','isolated-notes-shell');localStorage.setItem('crokodial_auth_user',JSON.stringify({id:11,name:'Native Notes fixture',tenant_id:9}));});
   await page.reload();
   await page.getByRole('tab',{name:'Notes',exact:true}).click();
-  await page.getByLabel('Search',{exact:true}).fill('Synthetic');
+  await page.locator('#notes-contact-search').fill('Synthetic');
   await page.getByRole('button',{name:'Synthetic Contact +12125550123',exact:true}).click();
   assert.equal(await page.locator('#contact-notes').inputValue(),'Saved native fixture');
   await page.locator('#contact-notes').fill('An in-app note that survives workspace navigation.');

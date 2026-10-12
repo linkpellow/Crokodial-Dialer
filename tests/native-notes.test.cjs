@@ -29,6 +29,9 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     function Harness(){const [tab,setTab]=useState('notes');return <div className='unified-shell'><div className='workspace-container'><section className='workspace-panel' hidden={tab!=='notes'}><NotesWorkspace engine={engine} store={store} recording={controller} onReturnToCall={()=>setTab('dialer')}/></section><section hidden={tab!=='dialer'}>Synthetic connected call<audio id='call-audio'/></section></div><nav className='workspace-nav'><button onClick={()=>setTab('dialer')}>Dialer</button><button onClick={()=>setTab('notes')}>Notes</button></nav></div>;}createRoot(document.getElementById('root')).render(<Harness/>);
   `;
   buildSync({stdin:{contents:entry,resolveDir:project,sourcefile:'native-notes-fixture.tsx',loader:'tsx'},bundle:true,jsx:'automatic',format:'esm',platform:'browser',target:'chrome140',outfile:path.join(directory,'fixture.js'),define:{'import.meta.env.VITE_API_BASE':'"https://fixture.invalid"'},loader:{'.css':'css'}});
+  const cssPath=path.join(directory,'fixture.css');
+  const css=await require('postcss')([require('tailwindcss')(path.join(project,'tailwind.config.js')),require('autoprefixer')]).process(fs.readFileSync(cssPath,'utf8'),{from:cssPath});
+  fs.writeFileSync(cssPath,css.css);
   fs.writeFileSync(path.join(directory,'index.html'),'<html><head><link rel="stylesheet" href="fixture.css"></head><body style="margin:0;background:#152319"><div id="root" style="height:100vh"></div><script type="module" src="fixture.js"></script></body></html>');
   const bootstrap = `
     const {app,BrowserWindow,ipcMain}=require('electron');
@@ -36,6 +39,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     const notes={11:{notes:'Original note',notesRevision:0},12:{notes:'Other contact',notesRevision:0}};const sessions={};global.sessions=sessions;global.clips=[];global.failUpload=false;global.createDelay=0;global.requests=[];
     const reply=(data,status=200)=>({ok:status<400,status,statusText:'Fixture',headers:{'content-type':'application/json'},body:JSON.stringify(status<400?{success:true,data}:{success:false,error:{message:data}})});
     ipcMain.handle('api-fetch',async(_,payload)=>{const url=new URL(payload.url),p=url.pathname,b=payload.body?JSON.parse(payload.body):{};global.requests.push({path:p,method:payload.method,body:b});
+      if(p==='/api/contacts/workspace')return reply({contacts:[{id:11,name:'Synthetic Call',firstName:'Synthetic',lastName:'Call',phone:'+12125550123',clientStatus:null},{id:12,name:'Other Contact',firstName:'Other',lastName:'Contact',phone:'+12125550124',clientStatus:null}],hasMore:false,nextCursor:null});
       if(p==='/api/contacts')return reply({contacts:[{id:11,e164:'+12125550123',firstName:'Synthetic',lastName:'Call'},{id:12,e164:'+12125550124',firstName:'Other',lastName:'Contact'}],pagination:{}});
       if(p==='/api/appointments')return reply([11,12].map(id=>({id:100+id,contact_id:id,contact:{id,firstName:id===11?'Synthetic':'Other',lastName:id===11?'Call':'Contact'},scheduled_at:new Date().toISOString(),duration:30,status:'scheduled',appointment_type:'Fixture consultation',follow_up_appointments:[]})));
       if(p==='/api/dialer/dispositions')return reply({dispositions:[{id:1,name:'Appointment'}]});

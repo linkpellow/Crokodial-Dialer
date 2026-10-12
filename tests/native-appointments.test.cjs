@@ -33,6 +33,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
           if (state.failSave) { status = 409; data = { error: { message: 'Fixture disposition was not saved.' } }; }
           else { if (p.includes('/contacts/11/')) state.disposition = b.disposition; else state.morganDisposition = b.disposition; data = { disposition: b.disposition, clientStatus: null }; }
         }
+        else if (p === '/api/contacts/workspace') data = { contacts: [{ ...contact(12), name: 'Morgan Fixture', phone: '+12125550112', clientStatus: null }], hasMore: false, nextCursor: null };
         else if (p === '/api/contacts') data = { contacts: [contact(12)], pagination: {} };
         else if (/^\/api\/dialer\/leads\/(11|12)$/.test(p)) { const id = Number(p.split('/').pop()); data = { ...contact(id), call_notes: state.notes[id], notes_revision: state.revisions[id] }; }
         else if (/^\/api\/dialer\/contacts\/(11|12)\/notes$/.test(p)) {
@@ -53,7 +54,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     const noon = new Date(); noon.setHours(14, 0, 0, 0); await page.clock.setFixedTime(noon);
     await page.getByRole('tab', { name: 'Notes', exact: true }).click();
     await page.locator('[data-appointment-id="101"]').waitFor();
-    const search = page.getByLabel('Search', { exact: true });
+    const search = page.locator('#notes-contact-search');
     assert.equal(await search.getAttribute('placeholder'), 'Name or phone');
     const list = page.locator('.appointments-list');
     const back = () => page.getByRole('button', { name: 'Back to appointments', exact: true }).click();
