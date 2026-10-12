@@ -42,7 +42,7 @@ npm start
 
 The packaged Apple Silicon app is `release/mac-arm64/Crokodial Workspace.app`. A local build can be run without replacing any installed application. Signed distribution and notarization require the organization's signing identity.
 
-Production verification on 2026-10-12 UTC confirmed successful desktop sign-in in the packaged app through native UI inspection. The live Plans catalog loaded 17 primary groups and 106 product variants, and the selected LIFEX plan guidance loaded from the platform. The production Personal Assistant named `Crokodial Personal Assistant` was created as agent 6. These checks sent no customer calls or emails. Full platform question-routing behavior remains separate from successful sign-in and catalog verification.
+Production verification on 2026-10-12 UTC confirmed successful desktop sign-in in the packaged app through native UI inspection. The live Plans catalog loaded 17 primary groups and 106 product variants, and the selected LIFEX plan guidance loaded from the platform. The production Personal Assistant named `Crokodial Personal Assistant` was created as agent 6. These checks sent no customer calls or emails. The corrected backend also passed the exact live LIFEX instructions/announcements question, returning no saved instructions and no announcements matching the supplied context. A subsequent native fix accepts only the exact missing-session404 when clearing a conversation after a backend restart; permission failures, missing-agent errors and401 handling remain unchanged. The rebuilt package passed those regressions, and the normal profile was relaunched successfully with its production sign-in restored.
 
 ## Verification limits
 
