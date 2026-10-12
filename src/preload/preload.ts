@@ -7,6 +7,10 @@ interface ApiFetchOptions {
 }
 
 contextBridge.exposeInMainWorld('dialer', {
+  openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+  openBrochure: (planId: string) => ipcRenderer.invoke('compass-brochure', planId),
+  clearAssistant: () => ipcRenderer.invoke('compass-clear'),
+  compassRequest: (operation: 'plans' | 'chat', payload?: unknown) => ipcRenderer.invoke('compass-request', operation, payload),
   minimize: () => ipcRenderer.invoke('window-minimize'),
   maximize: () => ipcRenderer.invoke('window-maximize'),
   close: () => ipcRenderer.invoke('window-close'),

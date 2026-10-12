@@ -799,6 +799,9 @@ export function DialerPage({ state, actions, onLogout, onOpenSettings }: DialerP
                   <input
                     id="phone-input"
                     type="tel"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={state.phoneNumber}
                     onChange={(e) => actions.setPhoneNumber(e.target.value)}
                     onKeyDown={(e) => {

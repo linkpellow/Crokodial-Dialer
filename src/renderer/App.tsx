@@ -13,19 +13,27 @@ import { DialerShell } from '@/renderer/components/DialerShell';
 function App() {
   const [user, setUser] = useState<LoginUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authAttempt, setAuthAttempt] = useState(0);
   const [requiresOrgMessage, setRequiresOrgMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setAuthLoading(true);
+    setAuthError(null);
     checkAuth().then((valid) => {
       if (cancelled) return;
       setUser(valid ? getStoredUser() : null);
+      setAuthLoading(false);
+    }).catch((error) => {
+      if (cancelled) return;
+      setAuthError(error instanceof Error ? error.message : 'Unable to connect to Crokodial.');
       setAuthLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authAttempt]);
 
   useEffect(() => {
     const handler = () => setUser(null);
@@ -64,6 +72,10 @@ function App() {
         <p className="text-white/90 text-sm">Loading...</p>
       </div>
     );
+  }
+
+  if (authError) {
+    return <div className="assistant-workspace"><div className="assistant-empty"><h2>Connection interrupted</h2><p role="alert">{authError}</p><button onClick={() => setAuthAttempt(value => value + 1)}>Retry connection</button><button onClick={() => setAuthError(null)}>Sign in</button></div></div>;
   }
 
   if (!user) {

@@ -2,8 +2,6 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE?: string;
-  readonly VITE_TELNYX_WEBRTC_USERNAME?: string;
-  readonly VITE_TELNYX_WEBRTC_PASSWORD?: string;
 }
 
 interface ApiFetchOptions {
@@ -21,6 +19,10 @@ interface SerializedFetchResponse {
 }
 
 interface DialerAPI {
+  openExternal?: (url: string) => Promise<void>;
+  openBrochure?: (planId: string) => Promise<void>;
+  clearAssistant?: () => Promise<void>;
+  compassRequest?: (operation: 'plans' | 'chat', payload?: unknown) => Promise<unknown>;
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
   close: () => Promise<void>;

@@ -1,6 +1,13 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, shell, type IpcMainInvokeEvent } from 'electron';
+import { compassRequest, openCompassBrochure, stopCompass } from './compass';
 import path from 'path';
 import fs from 'fs';
+
+// Never reuse or modify the installed Dialer's profile.
+app.setName('Crokodial Workspace');
+app.setPath('userData', process.env.CROKODIAL_USER_DATA_DIR ? path.resolve(process.env.CROKODIAL_USER_DATA_DIR) : path.join(app.getPath('appData'), 'Crokodial Workspace'));
+
+const PLATFORM_ORIGIN: string = JSON.parse(fs.readFileSync(path.join(__dirname, 'platform-config.json'), 'utf8')).origin;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'dialer-window.json');
 
@@ -168,9 +175,12 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      spellcheck: false,
     },
   });
 
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   mainWindow.setAspectRatio(IPHONE_ASPECT_RATIO);
 
   mainWindow.on('ready-to-show', () => {
@@ -179,8 +189,10 @@ function createWindow(): void {
   mainWindow.on('move', scheduleSaveBounds);
   mainWindow.on('resize', scheduleSaveBounds);
 
-  if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173');
+  if (!app.isPackaged && process.env.CROKODIAL_RENDERER_URL) {
+    const rendererUrl = new URL(process.env.CROKODIAL_RENDERER_URL);
+    if (!['localhost', '127.0.0.1'].includes(rendererUrl.hostname)) throw new Error('Development renderer must run on localhost.');
+    mainWindow.loadURL(rendererUrl.href);
   } else {
     mainWindow.loadFile(
       path.join(__dirname, '../../dist-renderer/index.html')
@@ -206,13 +218,22 @@ interface ApiFetchPayload {
   body?: string;
 }
 
-ipcMain.handle('api-fetch', async (_event, payload: ApiFetchPayload) => {
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Untrusted request.');
+}
+
+ipcMain.handle('api-fetch', async (event, payload: ApiFetchPayload) => {
+  assertTrustedSender(event);
   const { url, method = 'GET', headers = {}, body } = payload;
   if (!url || typeof url !== 'string') {
     return { ok: false, status: 0, statusText: 'Invalid URL', headers: {}, body: '' };
   }
   try {
+    const target = new URL(url);
+    if (target.origin !== PLATFORM_ORIGIN || !target.pathname.startsWith('/api/') || target.username || target.password) throw new Error('Request is outside the configured Crokodial API.');
     const res = await fetch(url, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(target.pathname.includes('/test/message') ? 120000 : 30000),
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -288,6 +309,19 @@ ipcMain.handle('window-resize', (_event, mode: 'full' | 'compact') => {
   });
 });
 
+ipcMain.handle('compass-request', (event, operation: unknown, payload: unknown) => { assertTrustedSender(event); return compassRequest(operation, payload); });
+ipcMain.handle('compass-brochure', (event, planId: unknown) => { assertTrustedSender(event); return openCompassBrochure(planId); });
+ipcMain.handle('compass-clear', event => { assertTrustedSender(event); stopCompass(); });
+ipcMain.handle('open-external', async (event, value: unknown) => {
+  assertTrustedSender(event);
+  if (typeof value !== 'string') throw new Error('Invalid link.');
+  const url = new URL(value);
+  if (url.origin !== PLATFORM_ORIGIN) throw new Error('Link is outside your configured Crokodial site.');
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Unsupported link.');
+  if (url.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('Use a secure Crokodial address.');
+  await shell.openExternal(url.href);
+});
+app.on('before-quit', stopCompass);
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {

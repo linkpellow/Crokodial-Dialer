@@ -15,12 +15,13 @@ import {
 } from '@/core/DialerEngine';
 import {
   fetchPhoneNumbers,
+  createVoiceSession,
   logCallStart,
 } from '@/renderer/services/dialerApiService';
 import { resolveCallerNumber } from '@/renderer/utils/resolveCallerNumber';
 
-/** Placeholder numbers for caller ID when no backend. Override via config. */
-const DEFAULT_PHONE_NUMBERS = ['+15551234567', '+15559876543'];
+// Caller IDs come only from the authenticated platform account.
+const DEFAULT_PHONE_NUMBERS: string[] = [];
 
 const SETTINGS_KEY = 'crokodial-dialer-settings';
 
@@ -129,12 +130,15 @@ export function useDialer(): {
     permissionError: null,
   });
 
+  const deviceId = useRef(crypto.randomUUID());
+  const [voiceAttempt, setVoiceAttempt] = useState(0);
+
   // Create engine once on mount (with onCallLog)
   useEffect(() => {
     if (!engineRef.current) {
       engineRef.current = new DialerEngine({
         onCallLog: (data) => {
-          logCallStart(data);
+          logCallStart({ ...data, deviceId: deviceId.current });
         },
       });
     }
@@ -205,18 +209,34 @@ export function useDialer(): {
     };
   }, []);
 
-  // Auto-initialize Telnyx when credentials are available from env
+  // Use the platform's tenant-authorized short-lived token; never bundle SIP secrets.
   useEffect(() => {
-    const username = (import.meta.env.VITE_TELNYX_WEBRTC_USERNAME as string)?.trim();
-    const password = (import.meta.env.VITE_TELNYX_WEBRTC_PASSWORD as string)?.trim();
-    if (username && password && engineRef.current) {
-      engineRef.current.initializeTelnyxClient({ login: username, password });
-    } else if ((!username || !password) && import.meta.env.DEV) {
-      console.warn(
-        '[useDialer] Telnyx credentials missing (VITE_TELNYX_WEBRTC_USERNAME, VITE_TELNYX_WEBRTC_PASSWORD). Skipping auto-connect.'
-      );
-    }
-  }, []);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const connect = async () => {
+      setState(previous => ({ ...previous, connectionStatus: 'connecting', connectionErrorMessage: null }));
+      try {
+        const session = await createVoiceSession(deviceId.current);
+        if (cancelled) return;
+        if (session.loginAfterMs > 0) await new Promise<void>(resolve => { timer = setTimeout(resolve, session.loginAfterMs); });
+        if (cancelled) return;
+        engineRef.current?.initializeTelnyxClient({ login_token: session.loginToken });
+        const renew = () => {
+          if (cancelled) return;
+          if (['dialing', 'ringing', 'in_call', 'held'].includes(stateRef.current.uiState)) {
+            timer = setTimeout(renew, 30000);
+            return;
+          }
+          void connect();
+        };
+        timer = setTimeout(renew, Math.max(1000, Date.parse(session.expiresAt) - Date.now() - 30000));
+      } catch (error) {
+        if (!cancelled) setState(previous => ({ ...previous, connectionStatus: 'error', connectionErrorMessage: error instanceof Error ? error.message : 'Unable to connect to calling services.' }));
+      }
+    };
+    void connect();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [voiceAttempt]);
 
   // Persist settings when volume, selectedCallerNumber, keypadColor, or outboundRingSound change
   useEffect(() => {
@@ -280,11 +300,7 @@ export function useDialer(): {
   }, []);
 
   const retryConnection = useCallback(() => {
-    const username = (import.meta.env.VITE_TELNYX_WEBRTC_USERNAME as string)?.trim();
-    const password = (import.meta.env.VITE_TELNYX_WEBRTC_PASSWORD as string)?.trim();
-    if (username && password && engineRef.current) {
-      engineRef.current.initializeTelnyxClient({ login: username, password });
-    }
+    if (!['dialing', 'ringing', 'in_call', 'held'].includes(stateRef.current.uiState)) setVoiceAttempt(value => value + 1);
   }, []);
 
   const startCall = useCallback(() => {

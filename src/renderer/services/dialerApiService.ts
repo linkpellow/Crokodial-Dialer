@@ -11,6 +11,8 @@ const API_BASE =
 
 const AUTH_TOKEN_KEY = 'crokodial_auth_token';
 const AUTH_USER_KEY = 'crokodial_auth_user';
+// Matches the platform's shared/src/desktopClient.ts allowlisted native client.
+const DESKTOP_CLIENT_HEADERS = { 'x-crokodial-desktop-client': 'crokodial-sms-desktop' };
 
 export interface LoginUser {
   id: number;
@@ -34,7 +36,7 @@ function buildUrl(path: string): string {
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'x-crokodial-contract-version': '2026-02-26.1', ...DESKTOP_CLIENT_HEADERS };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -46,7 +48,7 @@ function getAuthHeaders(): Record<string, string> {
  * Bypasses CORS when running in Electron by routing through main process.
  */
 async function doFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  if (!url) return new Response(null, { status: 0 });
+  if (!url) throw new Error('API base not configured. Set VITE_API_BASE.');
 
   const apiFetch = typeof window !== 'undefined' && window.dialer?.apiFetch;
 
@@ -66,7 +68,8 @@ async function doFetch(url: string, options: RequestInit = {}): Promise<Response
       headers: Object.keys(headers).length > 0 ? headers : undefined,
       body,
     });
-    return new Response(serialized.body, {
+    if (serialized.status === 0) throw new Error('Unable to reach Crokodial. Check your network connection and retry.');
+    return new Response([204, 205, 304].includes(serialized.status) ? null : serialized.body, {
       status: serialized.status,
       statusText: serialized.statusText,
       headers: serialized.headers,
@@ -88,7 +91,7 @@ export async function authenticatedFetch(
   url: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  if (!url) return new Response(null, { status: 0 });
+  if (!url) throw new Error('API base not configured. Set VITE_API_BASE.');
   const headers = { ...getAuthHeaders(), ...(options.headers as Record<string, string>) };
   const res = await doFetch(url, {
     ...options,
@@ -145,11 +148,13 @@ export function isAuthenticated(): boolean {
  * Login with email and password. Stores JWT and user in localStorage.
  */
 export async function login(email: string, password: string): Promise<LoginUser> {
-  const url = buildUrl('/api/auth/login');
+  // Web login returns only an HttpOnly cookie. The native IPC client uses the
+  // desktop endpoint's bearer token and does not share browser cookie storage.
+  const url = buildUrl('/api/auth/desktop/login');
   if (!url) throw new Error('API base not configured. Set VITE_API_BASE.');
   const res = await doFetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...DESKTOP_CLIENT_HEADERS },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
@@ -170,7 +175,7 @@ export async function login(email: string, password: string): Promise<LoginUser>
   const payload = body?.data ?? body;
   const token = payload?.token;
   const user = payload?.user ?? (payload as unknown as LoginUser);
-  if (!token || !user || typeof user !== 'object') {
+  if (typeof token !== 'string' || !token.trim() || !user || typeof user !== 'object' || !Number.isSafeInteger(user.id) || user.id <= 0) {
     throw new Error('Invalid login response');
   }
   localStorage.setItem(AUTH_TOKEN_KEY, token);
@@ -233,6 +238,7 @@ export interface PhoneNumbersResponse {
 }
 
 export interface LogCallPayload {
+  deviceId?: string;
   destinationNumber: string;
   callerNumber: string;
   direction?: 'inbound' | 'outbound';
@@ -524,4 +530,18 @@ export async function fetchContact(id: number): Promise<Contact | null> {
   if (!body) return null;
   const payload = (body as { data?: Contact })?.data ?? body;
   return (payload as Contact)?.id ? (payload as Contact) : null;
+}
+
+/** Tenant-scoped platform voice session. SIP passwords never enter the build. */
+export async function createVoiceSession(deviceId: string): Promise<{ loginToken: string; expiresAt: string; loginAfterMs: number }> {
+  const response = await authenticatedFetch(buildUrl('/api/dialer/voice-session'), {
+    method: 'POST', body: JSON.stringify({ deviceId }),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error?.message ?? 'Unable to establish a voice session. Check your calling permissions in Crokodial.');
+  const session = body?.data ?? body;
+  if (typeof session?.loginToken !== 'string' || !Number.isFinite(Date.parse(session.expiresAt)) || !Number.isFinite(session.loginAfterMs) || session.loginAfterMs < 0) {
+    throw new Error('Crokodial returned an invalid voice session.');
+  }
+  return session;
 }
