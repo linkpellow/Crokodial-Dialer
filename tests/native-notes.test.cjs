@@ -36,6 +36,8 @@ const { _electron: electron } = require('playwright');
     const reply=(data,status=200)=>({ok:status<400,status,statusText:'Fixture',headers:{'content-type':'application/json'},body:JSON.stringify(status<400?{success:true,data}:{success:false,error:{message:data}})});
     ipcMain.handle('api-fetch',async(_,payload)=>{const url=new URL(payload.url),p=url.pathname,b=payload.body?JSON.parse(payload.body):{};global.requests.push({path:p,method:payload.method,body:b});
       if(p==='/api/contacts')return reply({contacts:[{id:11,e164:'+12125550123',firstName:'Synthetic',lastName:'Call'},{id:12,e164:'+12125550124',firstName:'Other',lastName:'Contact'}],pagination:{}});
+      if(p==='/api/appointments')return reply([11,12].map(id=>({id:100+id,contact_id:id,contact:{id,firstName:id===11?'Synthetic':'Other',lastName:id===11?'Call':'Contact'},scheduled_at:new Date().toISOString(),duration:30,status:'scheduled',appointment_type:'Fixture consultation',follow_up_appointments:[]})));
+      if(p==='/api/dialer/dispositions')return reply({dispositions:[{id:1,name:'Appointment'}]});
       if(p==='/api/dialer/recordings/capabilities')return reply({available:true,maxBytes:67108864,maxDurationSeconds:7200,notesMaxCharacters:200000});
       const lead=p.match(/leads\\/(\\d+)$/);if(lead){const id=Number(lead[1]);return reply({id,e164:id===11?'+12125550123':'+12125550124',firstName:id===11?'Synthetic':'Other',lastName:id===11?'Call':'Contact',call_notes:notes[id].notes,notes_revision:notes[id].notesRevision});}
       const saved=p.match(/contacts\\/(\\d+)\\/notes$/);if(saved){const id=Number(saved[1]);notes[id]={notes:b.notes,notesRevision:notes[id].notesRevision+1};return reply({contactId:id,...notes[id]});}
@@ -63,6 +65,14 @@ const { _electron: electron } = require('playwright');
     await app.evaluate(()=>global.createDelay=1400);
     await page.getByRole('button',{name:'Record call',exact:true}).click();
     await page.getByText('Live synthetic draft',{exact:true}).waitFor({timeout:15000}).catch(async error=>{console.error('Live draft diagnostics',await page.locator('body').innerText(),await page.evaluate(()=>window.testNotes.controller.getSnapshot()),errors);throw error;});
+    const recordingSession = await page.evaluate(()=>window.testNotes.controller.getSnapshot().sessionId);
+    await page.locator('[data-appointment-id="112"] .appointment-select').click();
+    await page.waitForFunction(()=>document.querySelector('#contact-notes')?.value==='Other contact');
+    assert.equal(await page.getByRole('button',{name:'Record call',exact:true}).isDisabled(),true);
+    assert.equal(await page.evaluate(()=>window.testNotes.controller.getSnapshot().contact.id),11);
+    assert.equal(await page.evaluate(()=>window.testNotes.controller.getSnapshot().sessionId),recordingSession);
+    await page.getByRole('button',{name:'Open recording contact',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#contact-notes')?.value==='Manual note before recording');
     await page.getByRole('button',{name:'Dialer',exact:true}).click();
     await page.getByRole('button',{name:'Notes',exact:true}).click();
     assert.equal(await page.getByLabel('Notes',{exact:true}).inputValue(),'Manual note before recording');

@@ -1,10 +1,12 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {_electron:electron}=require('playwright');
+const {hideNativeWindows}=require('./fixtures/hide-native-windows.cjs');
 (async()=>{
  const profile=fs.mkdtempSync(path.join(os.tmpdir(),'native-notes-shell-'));
  const app=await electron.launch({executablePath:process.env.CROKODIAL_APP_EXECUTABLE||require('electron'),args:[path.resolve('.')],env:{...process.env,CROKODIAL_USER_DATA_DIR:profile,CROKODIAL_RENDERER_URL:''}});
  try{
   const page=await app.firstWindow();const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await hideNativeWindows(app);
   await app.evaluate(({ipcMain,BrowserWindow})=>{
    for(const window of BrowserWindow.getAllWindows())window.hide();
    global.notesText='Saved native fixture';global.notesRevision=0;
@@ -12,6 +14,8 @@ const {_electron:electron}=require('playwright');
     const p=new URL(payload.url).pathname,b=payload.body?JSON.parse(payload.body):{};let data={},status=200;
     if(p==='/api/auth/me')data={id:11,name:'Native Notes fixture',tenant_id:9};
     else if(p==='/api/contacts')data={contacts:[{id:11,firstName:'Synthetic',lastName:'Contact',e164:'+12125550123'}],pagination:{}};
+    else if(p==='/api/appointments')data=[];
+    else if(p==='/api/dialer/dispositions')data={dispositions:[{id:1,name:'Appointment'}]};
     else if(p==='/api/dialer/leads/11')data={id:11,firstName:'Synthetic',lastName:'Contact',e164:'+12125550123',call_notes:global.notesText,notes_revision:global.notesRevision};
     else if(p==='/api/dialer/contacts/11/notes'){global.notesText=b.notes;global.notesRevision++;data={contactId:11,notes:global.notesText,notesRevision:global.notesRevision};}
     else if(p==='/api/dialer/contacts/11/recording-sessions')data={sessions:[]};

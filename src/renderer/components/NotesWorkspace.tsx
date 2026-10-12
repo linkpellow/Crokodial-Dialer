@@ -6,6 +6,8 @@ import { notesApi } from '../services/notesApiService';
 import { fetchContacts, type Contact } from '../services/dialerApiService';
 import { NativeRecordingController, type RecordingContact } from '../services/nativeRecordingController';
 import type { ConversationRecordingSessionSummary, RecordingSession } from '../../shared/conversationRecording';
+import { WorkspaceAppointments } from './WorkspaceAppointments';
+import { linkedAppointmentContact, type AppointmentSelection, type WorkspaceAppointment } from '../services/appointmentsApiService';
 
 const nameOf = (contact: Contact) => `${contact.firstName ?? contact.first_name ?? ''} ${contact.lastName ?? contact.last_name ?? ''}`.trim() || contact.e164;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -15,6 +17,8 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
   const drafts = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const capture = useSyncExternalStore(recording.subscribe, recording.getSnapshot);
   const [selected, setSelected] = useState<RecordingContact | null>(null);
+  const [selectedAppointment, setSelectedAppointment] = useState<AppointmentSelection | null>(null);
+  const appointmentsRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -44,7 +48,7 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
     }, 300);
     return () => { canceled = true; clearTimeout(timer); };
   }, [query]);
-  async function selectContact(id: number) {
+  async function selectContact(id: number, appointment: AppointmentSelection | null = null) {
     const generation = ++selectionGeneration.current; ++playbackGeneration.current;
     setLoading(true); setError(''); setAudioUrl(''); setViewed(null);
     try {
@@ -52,11 +56,17 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
       if (!mounted.current || generation !== selectionGeneration.current) return;
       store.receive(contact);
       setSelected({ id: contact.id, e164: contact.e164, name: nameOf(contact) });
+      setSelectedAppointment(appointment);
       setQuery(''); setResults([]); setHistory([]);
       const sessions = await notesApi.list(id);
       if (mounted.current && generation === selectionGeneration.current) setHistory(sessions);
     } catch (failure) { if (mounted.current && generation === selectionGeneration.current) setError(failure instanceof Error ? failure.message : 'Unable to load contact notes.'); }
     finally { if (mounted.current && generation === selectionGeneration.current) setLoading(false); }
+  }
+  function selectAppointment(appointment: WorkspaceAppointment) {
+    const contactId = linkedAppointmentContact(appointment);
+    if (!contactId) { setError('This appointment has no linked contact. Find a contact above to take notes.'); return; }
+    void selectContact(contactId, { id: appointment.id, contactId });
   }
   async function refreshHistory() {
     if (!selected) return;
@@ -121,8 +131,10 @@ export function NotesWorkspace({ engine, store, recording, onReturnToCall }: {
       {loading && <p role="status" className="notes-muted">Loading contact notes…</p>}
       {error && <p role="alert" className="assistant-error">{error}</p>}
       {recordingElsewhere && <div className="notes-card"><p>Recording for {capture.contact?.name} · {clock(capture.elapsedSeconds)}</p><button onClick={() => void selectContact(capture.contact!.id)}>Open recording contact</button></div>}
-      {!selected && !loading && <div className="assistant-empty"><FileText size={27}/><h2>Notes beside your call</h2><p>Select the matching contact to edit notes or record both sides of a connected call. Live AI notes appear here as the conversation continues.</p></div>}
+      <div ref={appointmentsRef}><WorkspaceAppointments selected={selectedAppointment} compact={Boolean(selected)} selecting={loading} onSelect={selectAppointment}/></div>
+      {!selected && !loading && <p className="notes-empty-compact">Select an appointment or find a contact above to open their notes. During a connected call, record both sides and take live AI notes here.</p>}
       {selected && <>
+        <button className="notes-back-to-appointments" onClick={() => { appointmentsRef.current?.scrollIntoView({ block: 'start' }); appointmentsRef.current?.querySelector<HTMLDivElement>('.appointments-list')?.focus({ preventScroll: true }); }}>Back to appointments</button>
         <div className="notes-contact"><div><strong>{selected.name}</strong><small>{selected.e164}</small></div><button className="icon-button" onClick={() => void refreshHistory()} aria-label="Refresh contact notes"><RefreshCw size={13}/></button></div>
         <label className="notes-label" htmlFor="contact-notes">Notes</label>
         <textarea id="contact-notes" value={draft?.draft ?? ''} disabled={!draft || loading} onChange={event => store.change(selected.id, event.target.value)} placeholder="Type notes for this contact…" />
