@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight, UserRound } from 'lucide-react';
-import { workspaceContactsApi, workspaceContactInitials, workspaceContactName, workspaceContactPhone, workspaceContactIndicator, mergeWorkspaceRows, patchWorkspaceContactRows, type WorkspaceContact, type WorkspaceContactFilter, type WorkspaceContactUpdate } from '../services/workspaceContactsApi';
+import { ChevronRight, UserRound, X } from 'lucide-react';
+import { workspaceContactsApi, workspaceContactInitials, workspaceContactName, workspaceContactPhone, workspaceContactIndicator, compareWorkspaceContacts, mergeWorkspaceRows, patchWorkspaceContactRows, type WorkspaceContact, type WorkspaceContactFilter, type WorkspaceContactUpdate } from '../services/workspaceContactsApi';
 import { CollapsibleSearch } from './CollapsibleSearch';
+import { ContactFilterPopover, DEFAULT_CONTACT_FILTERS, type ContactFilterValue } from './ContactFilterPopover';
 import './contacts.css';
 
 export function WorkspaceContacts({ onSelect, selecting = false, selectedContactId, active = true, error: selectionError = '', refreshKey = 0, contactUpdate }: {
   onSelect: (contactId: number) => void; selecting?: boolean; selectedContactId?: number; active?: boolean; error?: string; refreshKey?: number | string; contactUpdate?: WorkspaceContactUpdate | null;
 }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState<Exclude<WorkspaceContactFilter, 'leads'>>('all');
+  const [criteria, setCriteria] = useState<ContactFilterValue>(DEFAULT_CONTACT_FILTERS);
   const [search, setSearch] = useState(''), [rows, setRows] = useState<WorkspaceContact[]>([]);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null), [hasMore, setHasMore] = useState(false);
@@ -16,7 +18,7 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
   const [backgroundLoading, setBackgroundLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null), sentinelRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0), busy = useRef(false), activeRef = useRef(active); activeRef.current = active;
-  const stateKey = `${filter}\n${search}`, stateKeyRef = useRef(stateKey); stateKeyRef.current = stateKey;
+  const stateKey = JSON.stringify([filter, search, criteria]), stateKeyRef = useRef(stateKey); stateKeyRef.current = stateKey;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++generation.current; }; }, []);
   useEffect(() => { const timer = setTimeout(() => setSearch(query.trim()), 250); return () => clearTimeout(timer); }, [query]);
@@ -39,24 +41,21 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
     busy.current = true; failedRequest.current = { cursor, head }; setBackgroundLoading(head); setLoading(true); setError('');
     try {
       const previous = rowsRef.current;
-      let page = await workspaceContactsApi.list({ filter, search, cursor });
+      let page = await workspaceContactsApi.list({ filter, search, cursor, ...criteria });
       const current = () => mounted.current && request === generation.current && requestedKey === stateKeyRef.current;
       if (!current()) return;
       if (head && previous.length) {
-        // Reconcile the loaded window, including visible older rows, against one
-        // fresh keyset snapshot. Stop at its former oldest ID, never at a guessed offset.
-        const oldestId = previous[previous.length - 1].id;
+        // Refresh through the previous sorted boundary, including any new rows
+        // before it, so older visible pages and their scroll anchors stay current.
+        const boundary = previous[previous.length - 1];
         let refreshed = page.contacts;
         const seenCursors = new Set<string>();
-        const maxPages = Math.ceil(previous.length / 50) + 2;
-        let pages = 1;
-        while (page.hasMore && (!refreshed.length || refreshed[refreshed.length - 1].id > oldestId)) {
-          if (!page.nextCursor || seenCursors.has(page.nextCursor) || pages >= maxPages) throw new Error('Contacts are changing quickly. The list will update automatically.');
+        while (page.hasMore && (!refreshed.length || compareWorkspaceContacts(refreshed[refreshed.length - 1], boundary, criteria.sort) < 0)) {
+          if (!page.nextCursor || seenCursors.has(page.nextCursor)) throw new Error('Contacts are changing quickly. The list will update automatically.');
           seenCursors.add(page.nextCursor);
-          page = await workspaceContactsApi.list({ filter, search, cursor: page.nextCursor });
+          page = await workspaceContactsApi.list({ filter, search, cursor: page.nextCursor, ...criteria });
           if (!current()) return;
-          refreshed = mergeWorkspaceRows(refreshed, page.contacts);
-          pages += 1;
+          refreshed = mergeWorkspaceRows(refreshed, page.contacts).sort((a, b) => compareWorkspaceContacts(a, b, criteria.sort));
         }
         const list = scrollRef.current;
         if (list && list.scrollTop > 0) {
@@ -66,14 +65,14 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
         }
         setRows(refreshed);
       } else {
-        setRows(cursor ? mergeWorkspaceRows(previous, page.contacts) : page.contacts);
+        setRows(cursor ? mergeWorkspaceRows(previous, page.contacts).sort((a, b) => compareWorkspaceContacts(a, b, criteria.sort)) : page.contacts);
       }
       setHasMore(page.hasMore); setNextCursor(page.nextCursor);
       setDataKey(requestedKey); setLoaded(true);
     } catch (failure) {
       if (mounted.current && request === generation.current && requestedKey === stateKeyRef.current) setError(failure instanceof Error ? failure.message : 'Unable to load contacts.');
     } finally { if (mounted.current && request === generation.current) { busy.current = false; setLoading(false); } }
-  }, [filter, search, stateKey]);
+  }, [filter, search, stateKey, criteria]);
   useEffect(() => {
     ++generation.current; busy.current = false; setRows([]); setNextCursor(null); setHasMore(false); setLoaded(false); setError(''); setLoading(false);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
@@ -81,17 +80,18 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
   }, [load]);
   useEffect(() => { if (active && !loaded && !loading && !error) void load(); }, [active, loaded, loading, error, load]);
   useEffect(() => {
+    if (!contactUpdate) return;
+    // A pre-mutation list response must not put stale membership back into this cache.
+    ++generation.current; busy.current = false; setLoading(false);
+    setRows(current => patchWorkspaceContactRows(current, filter, contactUpdate).filter(contact => !criteria.disposition || (criteria.disposition === '__none__' ? !contact.disposition : contact.disposition === criteria.disposition)));
+    pendingRefresh.current = true;
+  }, [contactUpdate?.id, contactUpdate?.clientStatus, contactUpdate?.disposition, filter, criteria.disposition]);
+  useEffect(() => {
     if (active && !lastActive.current && loaded) pendingRefresh.current = true;
     if (refreshKey !== lastRefreshKey.current) { pendingRefresh.current = true; lastRefreshKey.current = refreshKey; }
     lastActive.current = active;
     if (active && loaded && dataKey === stateKey && !loading && pendingRefresh.current) { pendingRefresh.current = false; void load(null, true); }
-  }, [active, loaded, loading, refreshKey, dataKey, stateKey, load]);
-  useEffect(() => {
-    if (!contactUpdate) return;
-    // A pre-mutation list response must not put stale membership back into this cache.
-    ++generation.current; busy.current = false; setLoading(false);
-    setRows(current => patchWorkspaceContactRows(current, filter, contactUpdate));
-  }, [contactUpdate?.id, contactUpdate?.clientStatus, contactUpdate?.disposition, filter]);
+  }, [active, loaded, loading, refreshKey, dataKey, stateKey, load, contactUpdate]);
   const loadMore = useCallback(() => { if (activeRef.current && hasMore && nextCursor && !loading && !error) void load(nextCursor); }, [hasMore, nextCursor, loading, error, load]);
   useEffect(() => {
     if (!active || !hasMore || !sentinelRef.current || !scrollRef.current) return;
@@ -113,7 +113,11 @@ export function WorkspaceContacts({ onSelect, selecting = false, selectedContact
     <div className="workspace-contact-toolbar">
       <CollapsibleSearch id="workspace-contact-search" value={query} onChange={setQuery} header={
         <div className="workspace-contact-filters" role="tablist" aria-label="Contact type">{(['all', 'clients'] as const).map(value => <button key={value} type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>{value.charAt(0).toUpperCase() + value.slice(1)}</button>)}</div>
-      } />
+      } actions={<ContactFilterPopover value={criteria} onChange={setCriteria} loadOptions={workspaceContactsApi.filterOptions} active={active} />} />
+      {Object.entries(criteria).some(([key, value]) => key !== 'sort' && value) && <div className="workspace-contact-filter-summary">
+        <span>{[criteria.state, criteria.disposition === '__none__' ? 'No disposition' : criteria.disposition, criteria.vendor, criteria.timezone].filter(Boolean).join(' · ')}</span>
+        <button type="button" aria-label="Clear contact filters" title="Clear contact filters" onClick={() => setCriteria(current => ({ ...DEFAULT_CONTACT_FILTERS, sort: current.sort }))}><X size={13}/></button>
+      </div>}
     </div>
     {selectionError && <p className="workspace-list-error" role="alert">{selectionError}</p>}
     {selecting && <p className="workspace-list-message" role="status">Opening contact notes…</p>}

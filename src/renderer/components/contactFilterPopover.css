@@ -1,0 +1,30 @@
+.contact-filter-trigger { position: relative; border: 1px solid transparent; transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; }
+.contact-filter-trigger[data-active=true] { color: #d2f278; background: #66871925; border-color: #a1c5598c; }
+.contact-filter-count { position: absolute; top: -5px; right: -5px; display: flex; justify-content: center; align-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 8px; background: #cfef85; color: #173016; font-size: 9px; font-weight: 650; line-height: 1; }
+.contact-filter-coordinate-probe { position: fixed; top: 0; left: 0; width: 100px; height: 1px; visibility: hidden; pointer-events: none; }
+.contact-filter-popover { position: fixed; z-index: 260; display: flex; flex-direction: column; box-sizing: border-box; border: 1px solid #b8ce688f; border-radius: 10px; background: linear-gradient(135deg, #123421, #092719 70%); box-shadow: 0 14px 32px #00000070; color: #e7f1e1; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-app-region: no-drag; animation: contact-filter-open 130ms ease-out; }
+.contact-filter-popover::before { content: ''; position: absolute; z-index: -1; top: -7px; left: var(--contact-filter-pointer, 50%); width: 12px; height: 12px; transform: translateX(-50%) rotate(45deg); border-top: 1px solid #b8ce688f; border-left: 1px solid #b8ce688f; background: #123321; }
+.contact-filter-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 12px; scrollbar-width: thin; scrollbar-color: #59713b transparent; border-radius: inherit; }
+.contact-filter-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 17px; }
+.contact-filter-heading h2 { margin: 0; font-size: 15px; line-height: 1.3; font-weight: 600; }
+.contact-filter-heading button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 26px; height: 26px; margin-right: -5px; border-radius: 5px; color: #b9ccae; }
+.contact-filter-heading button:hover { background: #ffffff0a; color: #edf6e5; }
+.contact-filter-row { display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 13px; }
+.contact-filter-row label { min-width: 0; color: #c7d6bf; font-size: 11px; line-height: 1.3; }
+.contact-filter-sort { margin-top: 0; padding-bottom: 14px; border-bottom: 1px solid #afc39522; }
+.contact-filter-select { position: relative; min-width: 0; }
+.contact-filter-select select { display: block; box-sizing: border-box; appearance: none; width: 100%; min-width: 0; height: 34px; padding: 0 26px 0 10px; border: 1px solid #a8c49336; border-radius: 6px; background: #061d1270; color: #e7f1e1; font: inherit; font-size: 11px; line-height: normal; text-overflow: ellipsis; cursor: pointer; }
+.contact-filter-select select:hover { border-color: #a8c4936e; }
+.contact-filter-select select option { background: #123321; color: #e7f1e1; }
+.contact-filter-select > svg { position: absolute; pointer-events: none; right: 9px; top: 50%; transform: translateY(-50%); color: #b5c8ad; }
+.contact-filter-loading, .contact-filter-error { margin: 12px 0 0; font-size: 10px; line-height: 1.4; color: #aebfa6; }
+.contact-filter-error { color: #efc19a; }
+.contact-filter-error button { color: inherit; text-decoration: underline; text-underline-offset: 2px; margin-left: 3px; }
+.contact-filter-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 17px; padding-top: 13px; border-top: 1px solid #afc39522; }
+.contact-filter-reset { padding: 8px 0; color: #c7d6bf; font-size: 11px; }
+.contact-filter-reset:hover { color: #f0fae8; }
+.contact-filter-apply { min-width: 81px; min-height: 33px; padding: 7px 17px; border-radius: 7px; border: 1px solid #d0ee9190; background: #c3e87c; color: #183014; font-size: 12px; font-weight: 600; transition: background-color 140ms ease; }
+.contact-filter-apply:hover { background: #d1f198; }
+.contact-filter-trigger:focus-visible, .contact-filter-popover button:focus-visible, .contact-filter-popover select:focus-visible { outline: 2px solid #c7f08d; outline-offset: 2px; }
+@keyframes contact-filter-open { from { opacity: 0; translate: 0 -3px; } to { opacity: 1; translate: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .contact-filter-popover { animation: none; } .contact-filter-trigger, .contact-filter-apply { transition: none; } }

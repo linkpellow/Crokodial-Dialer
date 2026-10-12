@@ -28,6 +28,29 @@ test('history is bound to exact contact and filter; unknown values remain unknow
   await assert.rejects(api.workspaceContactsApi.history(0), /valid contact/);
   payload.contactId = 3; await assert.rejects(api.workspaceContactsApi.history(2), /verify this contact/);
 });
+test('all contact filters reach the scoped server and unsupported servers cannot silently ignore them', async () => {
+  const criteria={sort:'name_asc',state:'FL',disposition:'Follow Up',vendor:'nextgen',timezone:'America/New_York'};
+  requests=[]; payload={contacts:[contact({sortKey:'synthetic person'})],hasMore:false,nextCursor:null,appliedFilters:criteria};
+  await api.workspaceContactsApi.list(criteria);
+  const params=new URL(requests[0].url).searchParams;
+  for(const [key,value] of Object.entries(criteria))assert.equal(params.get(key),value);
+  delete payload.appliedFilters;
+  await assert.rejects(api.workspaceContactsApi.list(criteria),/not available on the server/);
+  payload.appliedFilters=criteria; delete payload.contacts[0].sortKey;
+  await assert.rejects(api.workspaceContactsApi.list(criteria),/sort order/);
+});
+test('filter options use the owner workspace endpoint and reject malformed metadata',async()=>{
+  requests=[];payload={states:['FL'],dispositions:['Follow Up'],vendors:['nextgen'],timezones:['America/New_York']};
+  assert.deepEqual(await api.workspaceContactsApi.filterOptions(),payload);
+  assert.equal(new URL(requests[0].url).pathname,'/api/contacts/workspace/filter-options');
+  payload={...payload,states:[42]};await assert.rejects(api.workspaceContactsApi.filterOptions(),/load contact filters/);
+});
+test('refresh boundaries follow each selected server ordering, including duplicate and Unicode names',()=>{
+  const rows=[contact({id:8,sortKey:'a'}),contact({id:3,sortKey:'a'}),contact({id:10,sortKey:'b'}),contact({id:1,sortKey:'\uffff'}),contact({id:2,sortKey:'𐀀'})];
+  const ids=sort=>[...rows].sort((a,b)=>api.compareWorkspaceContacts(a,b,sort)).map(row=>row.id);
+  assert.deepEqual(ids('newest'),[10,8,3,2,1]);assert.deepEqual(ids('oldest'),[1,2,3,8,10]);
+  assert.deepEqual(ids('name_asc'),[8,3,10,1,2]);assert.deepEqual(ids('name_desc'),[2,1,10,8,3]);
+});
 test('a repeated pagination cursor is rejected instead of looping indefinitely', async () => {
   payload = { contacts: [contact()], hasMore: true, nextCursor: 'same' };
   await assert.rejects(api.workspaceContactsApi.list({ cursor: 'same' }), /could not advance/);

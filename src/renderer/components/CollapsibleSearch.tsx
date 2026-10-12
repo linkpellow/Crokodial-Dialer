@@ -3,11 +3,12 @@ import { Search, X } from 'lucide-react';
 import './collapsibleSearch.css';
 
 /** Shared search disclosure: an empty search takes no space beyond its icon. */
-export function CollapsibleSearch({ id, value, onChange, header, children, placeholder = 'Name or phone', label = 'Search' }: {
+export function CollapsibleSearch({ id, value, onChange, header, actions, children, placeholder = 'Name or phone', label = 'Search' }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
   header?: ReactNode;
+  actions?: ReactNode;
   children?: ReactNode;
   placeholder?: string;
   label?: string;
@@ -40,6 +41,7 @@ export function CollapsibleSearch({ id, value, onChange, header, children, place
       <button ref={trigger} type="button" className="icon-button workspace-search-trigger" aria-label={expanded ? 'Close search' : label} title={expanded ? 'Close search' : label} aria-controls={`${id}-reveal`} aria-expanded={expanded} onClick={() => expanded ? close() : setExpanded(true)}>
         {expanded ? <X size={17} aria-hidden="true"/> : <Search size={17} aria-hidden="true"/>}
       </button>
+      {actions}
     </div>
     <div id={`${id}-reveal`} className="workspace-search-reveal" aria-hidden={!expanded}>
       <div className="workspace-search-reveal-inner">

@@ -2,6 +2,9 @@ import { authenticatedFetch } from './dialerApiService';
 import { appointmentTimeSlot, localDateValue, viewerTimeZone, type WorkspaceAppointment } from './appointmentsApiService';
 
 export type WorkspaceContactFilter = 'all' | 'leads' | 'clients';
+export type WorkspaceContactSort = 'newest' | 'oldest' | 'name_asc' | 'name_desc';
+export interface WorkspaceContactCriteria { sort: WorkspaceContactSort; state: string; disposition: string; vendor: string; timezone: string }
+export interface WorkspaceContactFilterOptions { states: string[]; dispositions: string[]; vendors: string[]; timezones: string[] }
 export type ContactHistoryFilter = 'all' | 'calls' | 'appointments';
 export interface WorkspaceContact {
   id: number;
@@ -13,13 +16,14 @@ export interface WorkspaceContact {
   state: string | null;
   clientStatus: 'client' | 'former_client' | null;
   disposition: string | null;
+  sortKey?: string;
   /** Optional while older platform releases are still serving contact pages. */
   hasAppointment?: boolean;
   appointmentIndicator?: 'no_show' | 'follow_up_needed' | 'client' | null;
 }
 export interface WorkspaceContactUpdate { id: number; clientStatus: 'client' | 'former_client' | null; disposition: string | null }
 export interface CursorPage { hasMore: boolean; nextCursor: string | null }
-export interface WorkspaceContactPage extends CursorPage { contacts: WorkspaceContact[] }
+export interface WorkspaceContactPage extends CursorPage { contacts: WorkspaceContact[]; appliedFilters?: WorkspaceContactCriteria }
 interface ContactActivityBase { id: string; occurredAt: string; status: string }
 export interface ContactCallActivity extends ContactActivityBase {
   kind: 'call'; callLogId: number; direction: 'inbound' | 'outbound' | null;
@@ -48,15 +52,25 @@ function query(filter: string, cursor?: string | null, limit = 50): URLSearchPar
   return params;
 }
 export const workspaceContactsApi = {
-  async list({ filter = 'all', search = '', cursor, limit = 50 }: {
+  async list({ filter = 'all', search = '', cursor, limit = 50, sort = 'newest', state = '', disposition = '', vendor = '', timezone = '' }: {
     filter?: WorkspaceContactFilter; search?: string; cursor?: string | null; limit?: number;
+    sort?: WorkspaceContactSort; state?: string; disposition?: string; vendor?: string; timezone?: string;
   } = {}): Promise<WorkspaceContactPage> {
     const params = query(filter, cursor, limit);
     if (search.trim()) params.set('search', search.trim());
+    const criteria = { sort, state, disposition, vendor, timezone };
+    Object.entries(criteria).forEach(([key, value]) => { if (value) params.set(key, value); });
     const page = await request<WorkspaceContactPage>(`/api/contacts/workspace?${params}`);
     if (!validPage(page) || !Array.isArray(page.contacts) || page.contacts.some(contact => !contact || !Number.isSafeInteger(contact.id) || contact.id <= 0 || typeof contact.name !== 'string' || (contact.phone !== null && typeof contact.phone !== 'string') || ![null, 'client', 'former_client'].includes(contact.clientStatus) || (contact.hasAppointment !== undefined && typeof contact.hasAppointment !== 'boolean') || (contact.appointmentIndicator !== undefined && ![null, 'no_show', 'follow_up_needed', 'client'].includes(contact.appointmentIndicator)))) throw new Error('Unable to read the contact list. Please retry.');
     if (cursor && page.hasMore && cursor === page.nextCursor) throw new Error('The contact list could not advance. Please retry.');
+    if ((sort !== 'newest' || state || disposition || vendor || timezone) && Object.entries(criteria).some(([key, value]) => page.appliedFilters?.[key as keyof WorkspaceContactCriteria] !== value)) throw new Error('These contact filters are not available on the server yet. Please try again shortly.');
+    if (sort.startsWith('name_') && page.contacts.some(contact => typeof contact.sortKey !== 'string')) throw new Error('Unable to verify the contact sort order. Please retry.');
     return page;
+  },
+  async filterOptions(): Promise<WorkspaceContactFilterOptions> {
+    const options = await request<WorkspaceContactFilterOptions>('/api/contacts/workspace/filter-options');
+    if (!options || ['states', 'dispositions', 'vendors', 'timezones'].some(key => !Array.isArray(options[key as keyof WorkspaceContactFilterOptions]) || options[key as keyof WorkspaceContactFilterOptions].some(value => typeof value !== 'string'))) throw new Error('Unable to load contact filters. Please retry.');
+    return options;
   },
   async history(contactId: number, { filter = 'all', cursor, limit = 50 }: {
     filter?: ContactHistoryFilter; cursor?: string | null; limit?: number;
@@ -69,6 +83,19 @@ export const workspaceContactsApi = {
   },
 };
 export function workspaceContactName(contact: WorkspaceContact): string { return contact.name.trim() || [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() || contact.phone || 'Unnamed contact'; }
+/** Same UTF-8/BINARY ordering as the server, including names outside the BMP. */
+export function compareWorkspaceContacts(a: WorkspaceContact, b: WorkspaceContact, sort: WorkspaceContactSort): number {
+  if (sort === 'newest') return b.id - a.id;
+  if (sort === 'oldest') return a.id - b.id;
+  const left = Array.from(a.sortKey ?? ''), right = Array.from(b.sortKey ?? '');
+  let order = 0;
+  for (let i = 0; i < Math.min(left.length, right.length); i++) {
+    order = left[i].codePointAt(0)! - right[i].codePointAt(0)!;
+    if (order) break;
+  }
+  order ||= left.length - right.length;
+  return (sort === 'name_desc' ? -order : order) || b.id - a.id;
+}
 export function workspaceContactInitials(contact: WorkspaceContact): string {
   const words = workspaceContactName(contact).split(/\s+/).filter(word => /[a-z]/i.test(word));
   return words.length ? `${words[0][0]}${words.length > 1 ? words[words.length - 1][0] : ''}`.toUpperCase() : '';

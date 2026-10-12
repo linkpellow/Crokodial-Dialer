@@ -7,6 +7,9 @@
 .workspace-contact-filters button[aria-selected=true] { color: #d2f278; border-color: #91bb452e; background-color: #66871938; }
 @media (prefers-reduced-motion: reduce) { .workspace-contact-toolbar .workspace-contact-filters button { transition: none; } }
 .workspace-contact-toolbar .workspace-search-disclosure { width: 100%; }
+.workspace-contact-filter-summary { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 6px 8px; border: 1px solid #a8e06326; border-radius: 6px; background: #071e1260; color: #c8d8be; font-size: 10px; -webkit-app-region: no-drag; }
+.workspace-contact-filter-summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-contact-filter-summary button { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 20px; }
 .contact-history-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .contact-history-heading h2 { font-size: 12px; font-weight: 500; margin: 0; }
 .workspace-list-filters { display: flex; flex-shrink: 0; gap: 6px; padding: 10px 0 9px; border-bottom: 1px solid #ffffff0c; }

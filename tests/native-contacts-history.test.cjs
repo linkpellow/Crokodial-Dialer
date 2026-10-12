@@ -57,23 +57,27 @@ function installFixture(ipcMain) {
     if (p === '/api/appointments') return reply([]);
     if (p === '/api/ai-agents') return reply([]);
     if (p === '/api/insurance-plans') return reply({ plans: [] });
+    if (p === '/api/contacts/workspace/filter-options') return reply({ states:['FL','TX'], dispositions:['Follow Up','Closed'], vendors:['nextgen','self gen'], timezones:['America/New_York','America/Chicago'] });
     if (p === '/api/contacts/workspace') {
       if (state.holdContacts) await new Promise(resolve => state.pendingContacts.push(resolve));
       if (state.failContacts) return reply('Fixture contacts unavailable.', 503);
       const limit = Number(q.get('limit') || 50), offset = Number((q.get('cursor') || '').split('-').pop()) || 0, search = q.get('search') || '', filter = q.get('filter') || 'all';
       let contacts = Array.from({ length: 160 }, (_, index) => {
         const item = contact(index + 1);
-        return { id:item.id, name:state.contactVersions[item.id] || item.firstName+' '+item.lastName, firstName:item.firstName, lastName:item.lastName, phone:item.e164, email:`fixture-${item.id}@example.test`, state:'FL', clientStatus:item.id%2===0?'client':null, disposition:null, hasAppointment:item.id%5===0, appointmentIndicator:state.contactIndicators[item.id] || (item.id%5===0?(item.id%3===0?'no_show':'follow_up_needed'):null) };
+        return { id:item.id, name:state.contactVersions[item.id] || item.firstName+' '+item.lastName, firstName:item.firstName, lastName:item.lastName, phone:item.e164, email:`fixture-${item.id}@example.test`, state:item.id%3===0?'TX':'FL', vendor:item.id%2===0?'nextgen':'self gen', timezone:item.id%3===0?'America/Chicago':'America/New_York', clientStatus:item.id%2===0?'client':null, disposition:item.id%5===0?'Follow Up':null, hasAppointment:item.id%5===0, appointmentIndicator:state.contactIndicators[item.id] || (item.id%5===0?(item.id%3===0?'no_show':'follow_up_needed'):null) };
       });
-      if(state.extraContact) contacts.push({ ...contacts[0], id:161, name:'Fixture 161', phone:'+12125550161', clientStatus:null, hasAppointment:false, appointmentIndicator:null });
+      if(state.extraContact) contacts.push({ ...contacts[0], id:161, name:state.contactVersions[161] || 'Fixture 161', phone:'+12125550161', clientStatus:null, hasAppointment:false, appointmentIndicator:null });
       for(let i=0; i<state.extraContactCount; i++) { const id=162+i; contacts.push({ ...contacts[0], id, name:'Fixture '+id, phone:'+12125550'+id, clientStatus:null, hasAppointment:false, appointmentIndicator:null }); }
       contacts = contacts.filter(item => !state.deletedContactIds.includes(item.id));
-      contacts.sort((a,b) => b.id-a.id);
+      const appliedFilters = {sort:q.get('sort')||'newest',state:q.get('state')||'',disposition:q.get('disposition')||'',vendor:q.get('vendor')||'',timezone:q.get('timezone')||''};
+      contacts.forEach(item => { item.sortKey = item.name.toLowerCase(); });
+      contacts.sort((a,b) => appliedFilters.sort==='oldest'?a.id-b.id:appliedFilters.sort.startsWith('name_')?((a.sortKey<b.sortKey?-1:a.sortKey>b.sortKey?1:0)*(appliedFilters.sort==='name_desc'?-1:1)||b.id-a.id):b.id-a.id);
+      contacts=contacts.filter(item=>['state','disposition','vendor','timezone'].every(key=>!appliedFilters[key]||(appliedFilters[key]==='__none__'?!item[key]:item[key]===appliedFilters[key])));
       if (filter === 'clients') contacts = contacts.filter(item => item.clientStatus === 'client');
       if (filter === 'leads') contacts = contacts.filter(item => item.clientStatus === null);
       if (search) contacts = contacts.filter(item => (item.name+' '+item.phone+' '+item.email).toLowerCase().includes(search.toLowerCase()));
       const selected = contacts.slice(offset, offset + limit), hasMore = offset + limit < contacts.length;
-      return reply({ contacts:selected, hasMore, nextCursor:hasMore?'contacts-'+(offset+limit):null });
+      return reply({ contacts:selected, hasMore, nextCursor:hasMore?'contacts-'+(offset+limit):null, appliedFilters });
     }
     const activity = p.match(/^\/api\/contacts\/workspace\/(\d+)\/activity$/);
     if (activity) {
@@ -159,6 +163,65 @@ function installFixture(ipcMain) {
     assert.equal(await search.getAttribute('placeholder'), 'Name or phone');
     await search.press('Escape');
     await search.waitFor({ state: 'hidden' });
+    // The filter dialog is a draft: Apply changes the entire server query, not
+    // just the current page. Dismissal and Reset must never silently apply edits.
+    const filterTrigger = contacts.getByRole('button', { name: /^Filter and sort contacts/ });
+    const filterDialog = page.getByRole('dialog', { name: 'Filter & sort', exact: true });
+    await filterTrigger.click();
+    await filterDialog.waitFor();
+    await eventually(async()=>await filterDialog.getByLabel('State',{exact:true}).locator('option').count()>1,'Scoped filter options load');
+    const unfilteredIds = await contactRows.evaluateAll(items=>items.map(item=>item.dataset.contactId));
+    await filterDialog.getByLabel('Sort by',{exact:true}).selectOption('name_asc');
+    await filterDialog.getByLabel('State',{exact:true}).selectOption('FL');
+    await filterDialog.getByLabel('Disposition',{exact:true}).selectOption('Follow Up');
+    await filterDialog.getByLabel('Vendor',{exact:true}).selectOption('nextgen');
+    await filterDialog.getByLabel('Timezone',{exact:true}).selectOption('America/New_York');
+    assert.deepEqual(await contactRows.evaluateAll(items=>items.map(item=>item.dataset.contactId)),unfilteredIds,'Draft selections do not change contacts');
+    await filterDialog.getByRole('button',{name:'Apply',exact:true}).click();
+    await filterDialog.waitFor({state:'hidden'});
+    await eventually(async()=>await contactRows.first().getAttribute('data-contact-id')==='10','Combined filters and name sort apply');
+    assert.match(await filterTrigger.getAttribute('aria-label'),/4 filters applied/);
+    assert.ok((await contactRows.evaluateAll(items=>items.map(item=>Number(item.dataset.contactId)))).every(id=>id%10===0&&id%3!==0));
+    await filterTrigger.click();
+    await filterDialog.waitFor({state:'visible'});
+    fs.mkdirSync('artifacts/native-contacts-history',{recursive:true});
+    await page.screenshot({path:'artifacts/native-contacts-history/filter-sort.png',animations:'disabled'});
+    const filterBounds=await filterDialog.boundingBox();
+    assert.ok(filterBounds.x>=0 && filterBounds.x+filterBounds.width<=356 && filterBounds.y+filterBounds.height<=750,'Popover stays within narrow viewport');
+    await filterDialog.getByRole('button',{name:'Reset',exact:true}).click();
+    await filterDialog.getByRole('button',{name:'Close filter and sort',exact:true}).click();
+    assert.match(await filterTrigger.getAttribute('aria-label'),/4 filters applied/,'Dismissing a reset draft keeps applied filters');
+    await filterTrigger.click();
+    await filterDialog.getByRole('button',{name:'Reset',exact:true}).click();
+    await filterDialog.getByLabel('Sort by',{exact:true}).selectOption('name_asc');
+    await filterDialog.getByRole('button',{name:'Apply',exact:true}).click();
+    await eventually(async()=>await contactRows.first().getAttribute('data-contact-id')==='1','Name sort covers all contacts after reset');
+    await contactList.evaluate(element=>{element.scrollTop=element.scrollHeight;});
+    await eventually(async()=>await contactRows.count()>=100,'Name ordering supports older cursor pages');
+    const sortedAnchor=contacts.locator('[data-contact-id="85"]');
+    await sortedAnchor.scrollIntoViewIfNeeded();
+    const sortedOffset=(await sortedAnchor.boundingBox()).y-(await contactList.boundingBox()).y;
+    await app.evaluate(()=>{global.fixture.extraContact=true;global.fixture.contactVersions[161]='Fixture 000';});
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});window.dispatchEvent(new Event('focus'));});
+    await eventually(async()=>await contactRows.first().getAttribute('data-contact-id')==='161','Sorted automatic refresh discovers a name inserted at the beginning');
+    assert.ok(Math.abs((await sortedAnchor.boundingBox()).y-(await contactList.boundingBox()).y-sortedOffset)<=1,'Name refresh preserves the visible anchor');
+    await filterTrigger.click();
+    await filterDialog.getByLabel('Sort by',{exact:true}).selectOption('oldest');
+    await filterDialog.getByRole('button',{name:'Apply',exact:true}).click();
+    await eventually(async()=>await contactRows.first().getAttribute('data-contact-id')==='1','Oldest sort starts with earliest contact');
+    await contacts.getByRole('button',{name:'Search',exact:true}).click();
+    await filterTrigger.click();
+    await filterDialog.getByLabel('Sort by',{exact:true}).selectOption('name_desc');
+    await filterDialog.getByLabel('Sort by',{exact:true}).press('Escape');
+    await filterDialog.waitFor({state:'hidden'});
+    assert.equal(await search.isVisible(),true,'Escape dismisses the popover without also closing search');
+    await search.press('Escape');
+    await app.evaluate(()=>{global.fixture.extraContact=false;delete global.fixture.contactVersions[161];});
+    await filterTrigger.click();
+    await filterDialog.getByRole('button',{name:'Reset',exact:true}).click();
+    await filterDialog.getByRole('button',{name:'Apply',exact:true}).click();
+    await eventually(async()=>await contactRows.count()===50&&await contactRows.first().getAttribute('data-contact-id')==='160','Reset and Apply restore defaults');
+    assert.equal(await filterTrigger.getAttribute('aria-label'),'Filter and sort contacts');
     assert.equal(await contactRows.first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'Fixture must include production Tailwind preflight instead of native button backgrounds');
     await contactFilters.getByRole('tab', { name: 'Clients', exact: true }).click();
     await eventually(async () => (await contactRows.first().getAttribute('data-contact-id')) === '160', 'Client filter must refresh the list');
