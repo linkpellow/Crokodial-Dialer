@@ -10,31 +10,40 @@ import { checkAuth, getStoredUser, logout, UNAUTHORIZED_EVENT, REQUIRES_TENANT_E
 import { LoginScreen } from '@/renderer/components/LoginScreen';
 import { nativeWorkSessionNotice } from './services/nativeWorkGuard';
 import { DialerShell } from '@/renderer/components/DialerShell';
+import { startSessionRecovery } from './services/sessionRecovery';
 
 function App() {
   const [user, setUser] = useState<LoginUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authAttempt, setAuthAttempt] = useState(0);
+  const [authRecoveryPaused, setAuthRecoveryPaused] = useState(false);
   const [requiresOrgMessage, setRequiresOrgMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    if (authRecoveryPaused) return;
     setAuthLoading(true);
     setAuthError(null);
-    checkAuth().then((valid) => {
-      if (cancelled) return;
-      setUser(valid ? getStoredUser() : null);
-      setAuthLoading(false);
-    }).catch((error) => {
-      if (cancelled) return;
-      setAuthError(error instanceof Error ? error.message : 'Unable to connect to Crokodial.');
-      setAuthLoading(false);
+    const recovery = startSessionRecovery({
+      check: checkAuth,
+      restored(valid) {
+        setUser(valid ? getStoredUser() : null);
+        setAuthError(null);
+        setAuthLoading(false);
+      },
+      failed(error) {
+        setAuthError(error instanceof Error ? error.message : 'Unable to connect to Crokodial.');
+        setAuthLoading(false);
+      },
     });
+    window.addEventListener('online', recovery.retry);
+    window.addEventListener('focus', recovery.retry);
     return () => {
-      cancelled = true;
+      recovery.cancel();
+      window.removeEventListener('online', recovery.retry);
+      window.removeEventListener('focus', recovery.retry);
     };
-  }, [authAttempt]);
+  }, [authAttempt, authRecoveryPaused]);
 
   useEffect(() => {
     const handler = () => { const notice = nativeWorkSessionNotice(); if (notice) setRequiresOrgMessage(notice); setUser(null); };
@@ -76,7 +85,7 @@ function App() {
   }
 
   if (authError) {
-    return <div className="assistant-workspace"><div className="assistant-empty"><h2>Connection interrupted</h2><p role="alert">{authError}</p><button onClick={() => setAuthAttempt(value => value + 1)}>Retry connection</button><button onClick={() => setAuthError(null)}>Sign in</button></div></div>;
+    return <div className="assistant-workspace"><div className="assistant-empty"><h2>Connection interrupted</h2><p role="alert">{authError}</p><button onClick={() => setAuthAttempt(value => value + 1)}>Retry connection</button><button onClick={() => { setAuthRecoveryPaused(true); setAuthError(null); }}>Sign in</button></div></div>;
   }
 
   if (!user) {

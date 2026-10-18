@@ -5,6 +5,7 @@
  */
 
 import { extractErrorMessage } from '@/utils/extractErrorMessage';
+import { SessionConnectionError } from './sessionRecovery';
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string)?.replace(/\/$/, '') ?? '';
@@ -68,7 +69,12 @@ async function doFetch(url: string, options: RequestInit = {}): Promise<Response
       headers: Object.keys(headers).length > 0 ? headers : undefined,
       body,
     });
-    if (serialized.status === 0) throw new Error('Unable to reach Crokodial. Check your network connection and retry.');
+    if (serialized.status === 0) {
+      const invalidConfiguration = serialized.statusText === 'Invalid URL' || serialized.statusText === 'Request is outside the configured Crokodial API.';
+      throw new SessionConnectionError(invalidConfiguration
+        ? 'The app connection settings do not match Crokodial. Update the app to reconnect.'
+        : 'Unable to reach Crokodial. Please check your connection.', !invalidConfiguration);
+    }
     return new Response([204, 205, 304].includes(serialized.status) ? null : serialized.body, {
       status: serialized.status,
       statusText: serialized.statusText,
@@ -80,7 +86,7 @@ async function doFetch(url: string, options: RequestInit = {}): Promise<Response
     ...options,
     headers: options.headers,
     credentials: 'include',
-  });
+  }).catch(() => { throw new SessionConnectionError('Unable to reach Crokodial. Please check your connection.'); });
 }
 
 /**
@@ -89,20 +95,31 @@ async function doFetch(url: string, options: RequestInit = {}): Promise<Response
  */
 export async function authenticatedFetch(
   url: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  sessionCheckSignal?: AbortSignal,
 ): Promise<Response> {
   if (!url) throw new Error('API base not configured. Set VITE_API_BASE.');
+  // A response belongs to the credential that sent it. An older request must
+  // never invalidate a replacement sign-in that completed while it was pending.
+  const requestToken = localStorage.getItem(AUTH_TOKEN_KEY);
+  const requestOwner = getStoredUser();
+  const ownsCurrentSession = () => {
+    const currentOwner = getStoredUser();
+    return localStorage.getItem(AUTH_TOKEN_KEY) === requestToken && currentOwner?.id === requestOwner?.id && currentOwner?.tenant_id === requestOwner?.tenant_id;
+  };
   const headers = { ...getAuthHeaders(), ...(options.headers as Record<string, string>) };
   const res = await doFetch(url, {
     ...options,
     headers,
   });
+  if (sessionCheckSignal?.aborted || !ownsCurrentSession()) return res;
   if (res.status === 401) {
     clearSession();
   }
   if (res.status === 403) {
     const cloned = res.clone();
     cloned.json().then((body: unknown) => {
+      if (sessionCheckSignal?.aborted || !ownsCurrentSession()) return;
       const b = body as { error?: { code?: string; message?: string } };
       if (b?.error?.code === 'REQUIRES_TENANT') {
         clearSession();
@@ -186,17 +203,21 @@ export async function login(email: string, password: string): Promise<LoginUser>
 /**
  * Verify token on startup. Returns true if valid; clears session and returns false on 401.
  */
-export async function checkAuth(): Promise<boolean> {
+export async function checkAuth(signal?: AbortSignal): Promise<boolean> {
   const url = buildUrl('/api/auth/me');
   if (!url) return false;
-  const res = await authenticatedFetch(url);
+  const res = await authenticatedFetch(url, {}, signal);
+  if (signal?.aborted) return false;
   if (res.status === 401) {
-    clearSession();
     return false;
+  }
+  if ([408, 429].includes(res.status) || res.status >= 500) {
+    throw new SessionConnectionError('Crokodial is temporarily unavailable.');
   }
   if (!res.ok) return false;
   try {
     const body = (await res.json()) as { data?: LoginUser } & LoginUser;
+    if (signal?.aborted) return false;
     const user = body?.data ?? body;
     if (user && typeof user === 'object' && 'id' in user) {
       localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
