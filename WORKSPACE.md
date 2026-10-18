@@ -211,6 +211,12 @@ node ../CrokodialSMS-1/scripts/workspace-app.mjs --open
 
 The checked launcher refuses a different application or stale compiled source. It preserves the existing `Crokodial Workspace` profile. A matching build digest establishes identity and freshness; the separate native workflow tests establish behavior.
 
+### Unified main chat release — October 18, 2026
+
+Native revision `1c1e149d50281bb8e924e0ff46d6af9913465ca0` is installed at `release/mac-arm64/Crokodial Workspace.app` with bundle ID `com.crokodial.workspace`. Its native source SHA-256 is `36a1f57f34d5715a2060bbffc7acf28aef3ae005f69a3b7df1ab237d7ba8a537`, and its `app.asar` SHA-256 is `5ce90b6f91abf6653a98caa83ec1a9f041daf4c8770179b2908066f8e7fc03a6`. The installed package passed strict deep signing verification and the manifest's source/build parity check.
+
+The Personal Assistant now exposes one continuous server-selected transcript. It has no new-chat, reset or delete path, and the same production history remained visible after launch in the installed app. This verification sent no live email or SMS. Obsolete discoverable `.app` copies were removed from the release tree; the single compressed rollback artifact is `release/backups/Crokodial-Workspace-before-unified-chat-20261018T074629Z.zip`.
+
 ## Chat connection and complete email review update
 
 The signed-in owner has one server-owned main conversation. Reloads and application restarts reopen the same conversation; the complete visible transcript remains in its append-only ledger and older pages load into the same interface. The native client does not create, clear, or delete owner chats. If the canonical conversation API is unavailable, the Workspace fails closed instead of opening an ephemeral preview session.
