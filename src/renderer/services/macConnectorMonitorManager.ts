@@ -2,7 +2,15 @@ import type { MacCurrentWriteAuthority, MacMessageThread, WhatsAppObservation } 
 import { transientMacAuthority } from './macConnectorService';
 
 export interface WhatsAppMonitorConversation { jid: string; label: string }
-export interface MacMonitorConfiguration { messages: boolean; whatsappConversation?: WhatsAppMonitorConversation; intervalMinutes: number }
+export const DEFAULT_MAC_MONITOR_KEYWORDS = ['urgent', 'asap', 'immediately', 'emergency', 'time sensitive', 'deadline', 'overdue', 'cancel today', 'need help', 'needs help'] as const;
+export const MAX_MAC_MONITOR_KEYWORDS = 20;
+export const MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS = 20;
+export interface MacMonitorConfiguration {
+  messages: boolean;
+  whatsappConversations: WhatsAppMonitorConversation[];
+  keywords: string[];
+  intervalMinutes: number;
+}
 export interface MacMonitorUrgencyHint {
   source: 'messages' | 'whatsapp'; observationId: string; threadId: string; threadTitle: string; preview: string; sentAt: string | null;
   level: 'attention'; heuristic: true; keywords: string[];
@@ -23,22 +31,46 @@ let currentRequest: ReturnType<typeof transientMacAuthority> | undefined;
 const listeners = new Set<(value: MacMonitorState) => void>();
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-function validConfiguration(value: unknown): value is MacMonitorConfiguration {
-  if (!value || typeof value !== 'object') return false;
+function validText(value: unknown, maximum: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function normalizeConfiguration(value: unknown): MacMonitorConfiguration | undefined {
+  if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
-  const whatsapp = row.whatsappConversation as Record<string, unknown> | undefined;
-  return typeof row.messages === 'boolean' && Number.isInteger(row.intervalMinutes) && Number(row.intervalMinutes) >= 1 && Number(row.intervalMinutes) <= 30
-    && row.whatsappQuery === undefined
-    && (whatsapp === undefined || Boolean(whatsapp) && typeof whatsapp.jid === 'string' && whatsapp.jid.trim().length > 0 && whatsapp.jid.length <= 256
-      && typeof whatsapp.label === 'string' && whatsapp.label.trim().length > 0 && whatsapp.label.length <= 200
-      && !/[\u0000-\u001f\u007f]/.test(whatsapp.jid) && !/[\u0000-\u001f\u007f]/.test(whatsapp.label))
-    && (row.messages || whatsapp !== undefined);
+  if (typeof row.messages !== 'boolean' || !Number.isInteger(row.intervalMinutes) || Number(row.intervalMinutes) < 1
+    || Number(row.intervalMinutes) > 30 || row.whatsappQuery !== undefined
+    || row.whatsappConversation !== undefined && row.whatsappConversations !== undefined) return undefined;
+  const rawConversations = row.whatsappConversations !== undefined ? row.whatsappConversations
+    : row.whatsappConversation !== undefined ? [row.whatsappConversation] : [];
+  if (!Array.isArray(rawConversations) || rawConversations.length > MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS) return undefined;
+  const whatsappConversations: WhatsAppMonitorConversation[] = [];
+  const jids = new Set<string>();
+  for (const value of rawConversations) {
+    if (!value || typeof value !== 'object') return undefined;
+    const conversation = value as Record<string, unknown>;
+    if (!validText(conversation.jid, 256) || !validText(conversation.label, 200)) return undefined;
+    const jid = conversation.jid.trim(), label = conversation.label.trim();
+    if (jids.has(jid)) return undefined;
+    jids.add(jid); whatsappConversations.push({ jid, label });
+  }
+  const rawKeywords = row.keywords === undefined ? DEFAULT_MAC_MONITOR_KEYWORDS : row.keywords;
+  if (!Array.isArray(rawKeywords) || rawKeywords.length < 1 || rawKeywords.length > MAX_MAC_MONITOR_KEYWORDS) return undefined;
+  const keywords: string[] = [], seenKeywords = new Set<string>();
+  for (const value of rawKeywords) {
+    if (!validText(value, 64)) return undefined;
+    const keyword = value.trim().replace(/\s+/g, ' ').toLowerCase();
+    if (seenKeywords.has(keyword)) return undefined;
+    seenKeywords.add(keyword); keywords.push(keyword);
+  }
+  if (!row.messages && whatsappConversations.length === 0) return undefined;
+  return { messages: row.messages, whatsappConversations, keywords, intervalMinutes: Number(row.intervalMinutes) };
 }
 
 function normalizeState(value: unknown): MacMonitorState {
   if (!value || typeof value !== 'object' || typeof (value as Record<string, unknown>).running !== 'boolean') throw new Error('The local monitor returned an invalid state.');
   const row = value as Record<string, any>;
-  const configuration = row.configuration === undefined ? undefined : validConfiguration(row.configuration) ? clone(row.configuration) : undefined;
+  const configuration = row.configuration === undefined ? undefined : normalizeConfiguration(row.configuration);
   if (row.running && !configuration) throw new Error('The local monitor returned an invalid configuration.');
   const raw = row.snapshot && typeof row.snapshot === 'object' ? row.snapshot : undefined;
   const snapshot: MacMonitorSnapshot | undefined = raw ? {
@@ -46,7 +78,7 @@ function normalizeState(value: unknown): MacMonitorState {
     messageThreads: Array.isArray(raw.messageThreads) ? raw.messageThreads.slice(0, 50) : [],
     whatsappObservations: Array.isArray(raw.whatsappObservations) ? raw.whatsappObservations.slice(0, 100) : [],
     urgencyHints: Array.isArray(raw.urgencyHints) ? raw.urgencyHints.slice(0, 20) : [],
-    errors: Array.isArray(raw.errors) ? raw.errors.slice(0, 2) : [],
+    errors: Array.isArray(raw.errors) ? raw.errors.slice(0, MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS + 1) : [],
   } : undefined;
   return { running: row.running, ...(configuration ? { configuration } : {}), ...(snapshot ? { snapshot } : {}), ...(typeof row.error === 'string' ? { error: row.error.slice(0, 500) } : {}) };
 }
@@ -98,9 +130,10 @@ export function subscribeMacMonitor(authority: MacCurrentWriteAuthority, listene
 }
 export function macMonitorState() { return clone(state); }
 export async function startMacMonitor(configuration: MacMonitorConfiguration, authority: MacCurrentWriteAuthority) {
-  if (!validConfiguration(configuration)) throw new Error('Select Messages or an exact WhatsApp conversation and an interval from 1 to 30 minutes.');
+  const normalized = normalizeConfiguration(configuration);
+  if (!normalized) throw new Error('Select Messages or one or more exact WhatsApp conversations, 1 to 20 unique urgency keywords, and an interval from 1 to 30 minutes.');
   const request = activate(authority); ensureSubscription();
-  const result = normalizeState(await native().startMonitor({ configuration, authority: request }));
+  const result = normalizeState(await native().startMonitor({ configuration: normalized, authority: request }));
   if (currentRequest === request) emit(result); return clone(result);
 }
 export async function stopMacMonitor(authority: MacCurrentWriteAuthority, clearSaved = true) {

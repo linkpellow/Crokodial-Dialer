@@ -248,6 +248,12 @@ test('connection requests restore from server history only, scoped to the select
  assert.equal(journal().length,0);
  for(const value of [{...pending,id:'not-a-uuid'},{...pending,state:'send_now'},{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['unknown']}}]){response=reply({sessionId:session,messages:[],pendingConnections:[value],hasMore:false});await assert.rejects(readAssistantConversation(7,session));}
 });
+test('Gmail modify connection requests restore the least broad capability closure',async()=>{
+ authenticate();const session=await openCurrentSession('gmail-modify-connection');const id=crypto.randomUUID();
+ const pending={id,originalRequest:'Archive this selected Gmail thread',connectionRequired:{provider:'gmail',capabilities:['modify'],resumePolicy:'prepare_only'},state:'waiting_connection',createdAt:123};
+ response=reply({sessionId:session,messages:[],pendingConnections:[pending],hasMore:false});
+ assert.deepEqual((await readAssistantConversation(7,session)).pendingConnections,[{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['send','history','mailbox_read','modify']}}]);
+});
 test('all OAuth connector continuations survive a native restart with one opaque resume route',async()=>{
  authenticate();const session=await openCurrentSession('connector-restart');
  const requirements=[

@@ -1,9 +1,9 @@
 import { useNativeWorkState } from './nativeWorkState';
-import { previewSurface } from './previewSurface';
+import { EmailContentReview, EmailRecipientReview } from './NativeEmailPreview';
 import { workspaceRequest } from '../../services/assistantWorkspaceApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { conditionalFollowUpConditions, type ConditionalFollowUp, type ConditionalFollowUpExclusion } from '../../services/assistantWorkspaceTypes';
-import { emailDraftPreview, type EmailDraftDetail, type EmailDraftSummary } from '../../services/assistantWorkspaceTypes';
+import { type EmailDraftDetail, type EmailDraftSummary } from '../../services/assistantWorkspaceTypes';
 
 const labels: Record<ConditionalFollowUp['status'], string> = {pending: 'Review required — unsent', scheduled: 'Scheduled', paused: 'Paused', checking: 'Checking conditions',
   submitting: 'Submission in progress', submitted: 'Submitted — delivery unconfirmed', suppressed: 'Suppressed — unsent', canceled: 'Canceled — unsent', unknown: 'Outcome unknown — do not resend'};
@@ -60,10 +60,10 @@ export function NativeConditionalFollowUps({agentId, initialFollowUpId, onActivi
     void post('', {...content, requestId}, key);
   }
   const renderPreview = (draft: EmailDraftDetail) => <div className="nativework-stack nativework-panel" aria-label={`Email preview ${draft.subject}`}>
-    <p>From: {draft.mailbox.sender} · To: {draft.email} · Revision {draft.revision}</p>
-    <p className="nativework-strong">{draft.subject}</p><p className="nativework-prewrap">{draft.text}</p>
-    {draft.html && <iframe title={`Scheduled email preview: ${draft.subject}`} sandbox="" referrerPolicy="no-referrer" srcDoc={emailDraftPreview(previewSurface(draft.html))} className="nativework-preview" />}
-    <ul className="nativework-small">{draft.attachments.map(item => <li key={item.sha256}>{item.name} — {item.byteSize} bytes · SHA-256 {item.sha256}</li>)}</ul>
+    <p>From: {draft.mailbox.sender} · Revision {draft.revision}</p>
+    <EmailRecipientReview draft={draft}/>
+    <p className="nativework-strong">{draft.subject}</p>
+    <EmailContentReview draft={draft}/>
   </div>;
   return <section aria-label="Conditional follow-ups" className="nativework-stack">
     <div><h3 className="nativework-strong">Conditional follow-ups</h3><p className="nativework-muted">Schedule a saved Gmail reply after reviewing its exact content. The assistant checks again just before sending.</p></div>

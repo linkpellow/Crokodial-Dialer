@@ -39,11 +39,16 @@ test('status never grants mailbox search from linked-history or cached/send-only
  assert.equal(gmailConnectionReady(status,['history']),false);
  assert.equal(gmailConnectionReady({...status,historyConnected:true},['mailbox_read']),false);
  assert.equal(gmailConnectionReady({...status,historyConnected:true,mailboxReadConnected:true},['send','history','mailbox_read']),true);
+ assert.equal(gmailConnectionReady({...status,historyConnected:true,mailboxReadConnected:true},['modify']),false);
+ assert.equal(gmailConnectionReady({...status,historyConnected:true,mailboxReadConnected:true,modifyConnected:true},['send','history','mailbox_read','modify']),true);
  assert.equal(gmailConnectionReady({...status,connected:false,historyConnected:true,mailboxReadConnected:true},['send']),false);
  assert.equal(gmailConnectionReady(null,['send']),false);
  assert.equal(gmailConnectionLabel(['mailbox_read'],status),'Connect Gmail send, search and history');
+ assert.equal(gmailConnectionLabel(['modify'],status),'Connect reviewed Gmail changes');
  assert.deepEqual(normalizeGmailCapabilities(['mailbox_read']),['send','history','mailbox_read']);
+ assert.deepEqual(normalizeGmailCapabilities(['modify']),['send','history','mailbox_read','modify']);
  assert.match(gmailCapabilityDisclosure(['mailbox_read']),/account identity, Gmail send, and Gmail read-only/);
+ assert.match(gmailCapabilityDisclosure(['modify']),/Gmail modify access/);
  assert.match(gmailCapabilityDisclosure(['send']),/account identity and Gmail send/);
 });
 test('editable draft preserves recipient provenance, fixed attachment bytes and subject while shedding template rerender metadata',()=>{

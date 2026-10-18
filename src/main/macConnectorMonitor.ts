@@ -12,7 +12,8 @@ export interface WhatsAppMonitorConversation {
 
 export interface MacMonitorConfiguration {
   messages: boolean;
-  whatsappConversation?: WhatsAppMonitorConversation;
+  whatsappConversations: WhatsAppMonitorConversation[];
+  keywords: string[];
   intervalMinutes: number;
 }
 
@@ -70,11 +71,13 @@ interface Clock {
 
 const MAX_MESSAGES = 50;
 const MAX_WHATSAPP = 100;
+const MAX_WHATSAPP_CONVERSATIONS = 20;
 const MAX_HINTS = 20;
 const MAX_SEEN = 1_000;
-const MAX_STORAGE_BYTES = 4_096;
-const KEYWORDS = ['urgent', 'asap', 'immediately', 'emergency', 'time sensitive', 'deadline', 'overdue', 'cancel today', 'need help', 'needs help'] as const;
-const keywordPattern = new RegExp(`(?:^|[^a-z0-9])(${KEYWORDS.map(value => value.replace(/\s+/g, '\\s+')).join('|')})(?=$|[^a-z0-9])`, 'gi');
+const MAX_STORAGE_BYTES = 32_768;
+const MAX_KEYWORDS = 20;
+const MAX_KEYWORD_LENGTH = 64;
+const DEFAULT_KEYWORDS = ['urgent', 'asap', 'immediately', 'emergency', 'time sensitive', 'deadline', 'overdue', 'cancel today', 'need help', 'needs help'] as const;
 
 function cleanText(value: unknown, maximum: number): string {
   return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, maximum) : '';
@@ -87,32 +90,64 @@ function exactText(value: unknown, label: string, maximum: number): string {
   return result;
 }
 
+function normalizeKeywords(value: unknown): string[] {
+  const values = value === undefined ? DEFAULT_KEYWORDS : value;
+  if (!Array.isArray(values) || values.length < 1 || values.length > MAX_KEYWORDS) {
+    throw new Error('Choose from 1 to 20 urgency keywords.');
+  }
+  const result: string[] = [], seen = new Set<string>();
+  for (const value of values) {
+    const keyword = exactText(value, 'Urgency keyword', MAX_KEYWORD_LENGTH).replace(/\s+/g, ' ').toLowerCase();
+    if (seen.has(keyword)) throw new Error('Urgency keywords must be unique.');
+    seen.add(keyword); result.push(keyword);
+  }
+  return result;
+}
+
+function normalizeConversation(value: unknown): WhatsAppMonitorConversation {
+  if (!value || typeof value !== 'object') throw new Error('Select an exact WhatsApp conversation.');
+  const row = value as Record<string, unknown>;
+  return {
+    jid: exactText(row.jid, 'WhatsApp conversation identifier', 256),
+    label: exactText(row.label, 'WhatsApp conversation label', 200),
+  };
+}
+
 function normalizeConfiguration(value: unknown): MacMonitorConfiguration {
-  if (!value || typeof value !== 'object') throw new Error('Select Messages or an exact WhatsApp conversation and an interval from 1 to 30 minutes.');
+  if (!value || typeof value !== 'object') throw new Error('Select Messages or one or more exact WhatsApp conversations and an interval from 1 to 30 minutes.');
   const input = value as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(input, 'whatsappQuery')) {
     throw new Error('Saved WhatsApp query monitors cannot be resumed safely. Search WhatsApp and explicitly select one conversation before monitoring.');
   }
   if (typeof input.messages !== 'boolean' || !Number.isInteger(input.intervalMinutes) || Number(input.intervalMinutes) < 1 || Number(input.intervalMinutes) > 30) {
-    throw new Error('Select Messages or an exact WhatsApp conversation and an interval from 1 to 30 minutes.');
+    throw new Error('Select Messages or one or more exact WhatsApp conversations and an interval from 1 to 30 minutes.');
   }
-  let whatsappConversation: WhatsAppMonitorConversation | undefined;
-  if (input.whatsappConversation !== undefined) {
-    if (!input.whatsappConversation || typeof input.whatsappConversation !== 'object') throw new Error('Select an exact WhatsApp conversation.');
-    const row = input.whatsappConversation as Record<string, unknown>;
-    whatsappConversation = {
-      jid: exactText(row.jid, 'WhatsApp conversation identifier', 256),
-      label: exactText(row.label, 'WhatsApp conversation label', 200),
-    };
+  if (input.whatsappConversation !== undefined && input.whatsappConversations !== undefined) {
+    throw new Error('Choose WhatsApp conversations using one configuration format.');
   }
-  if (!input.messages && !whatsappConversation) throw new Error('Select Messages or an exact WhatsApp conversation and an interval from 1 to 30 minutes.');
-  return { messages: input.messages, ...(whatsappConversation ? { whatsappConversation } : {}), intervalMinutes: Number(input.intervalMinutes) };
+  // Migrate the former single-conversation shape without weakening the stable-JID review boundary.
+  const rawConversations = input.whatsappConversations !== undefined
+    ? input.whatsappConversations
+    : input.whatsappConversation !== undefined ? [input.whatsappConversation] : [];
+  if (!Array.isArray(rawConversations) || rawConversations.length > MAX_WHATSAPP_CONVERSATIONS) {
+    throw new Error('Select at most 20 exact WhatsApp conversations.');
+  }
+  const whatsappConversations = rawConversations.map(normalizeConversation);
+  const jids = new Set<string>();
+  for (const conversation of whatsappConversations) {
+    if (jids.has(conversation.jid)) throw new Error('Each WhatsApp conversation can be selected only once.');
+    jids.add(conversation.jid);
+  }
+  if (!input.messages && whatsappConversations.length === 0) throw new Error('Select Messages or one or more exact WhatsApp conversations and an interval from 1 to 30 minutes.');
+  return { messages: input.messages, whatsappConversations, keywords: normalizeKeywords(input.keywords), intervalMinutes: Number(input.intervalMinutes) };
 }
 
-function matchedKeywords(text: string): string[] {
+function matchedKeywords(text: string, configured: readonly string[]): string[] {
   const matches = new Set<string>();
-  keywordPattern.lastIndex = 0;
-  for (let match = keywordPattern.exec(text); match && matches.size < 8; match = keywordPattern.exec(text)) matches.add(match[1].toLowerCase().replace(/\s+/g, ' '));
+  for (const keyword of configured) {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    if (new RegExp(`(?:^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(text)) matches.add(keyword);
+  }
   return [...matches];
 }
 
@@ -154,37 +189,50 @@ export function createMacConnectorMonitor(dependencies: { readers: Readers; stor
     while (seenOrder.length > MAX_SEEN) { const removed = seenOrder.shift(); if (removed) seen.delete(removed); }
     return true;
   };
-  const hints = (messages: MessageThread[], whatsapp: WhatsAppObservation[]): MacMonitorUrgencyHint[] => {
+  const hints = (messages: MessageThread[], whatsapp: WhatsAppObservation[], configuredKeywords: readonly string[]): MacMonitorUrgencyHint[] => {
     const result: MacMonitorUrgencyHint[] = [];
     for (const row of messages) {
       const key = observationKey('messages', row.id, row.lastMessageAt, row.lastMessage), fresh = remember(key);
-      const keywords = row.lastMessageFromMe === false ? matchedKeywords(row.lastMessage) : [];
+      const keywords = row.lastMessageFromMe === false ? matchedKeywords(row.lastMessage, configuredKeywords) : [];
       if (fresh && keywords.length && result.length < MAX_HINTS) result.push({ source: 'messages', observationId: key, threadId: row.id, threadTitle: cleanText(row.title, 200), preview: cleanText(row.lastMessage, 240), sentAt: row.lastMessageAt, level: 'attention', heuristic: true, keywords });
     }
     for (const row of whatsapp) {
       const key = observationKey('whatsapp', `${row.threadJid}:${row.id}`, row.sentAt, row.text), fresh = remember(key);
-      const keywords = !row.fromMe ? matchedKeywords(row.text) : [];
+      const keywords = !row.fromMe ? matchedKeywords(row.text, configuredKeywords) : [];
       if (fresh && keywords.length && result.length < MAX_HINTS) result.push({ source: 'whatsapp', observationId: key, threadId: row.threadJid, threadTitle: cleanText(row.threadTitle, 200), preview: cleanText(row.text, 240), sentAt: row.sentAt, level: 'attention', heuristic: true, keywords });
     }
     return result;
   };
   async function read(configuration: MacMonitorConfiguration, baselineExisting = false): Promise<MacMonitorSnapshot> {
-    const errors: MacMonitorSnapshot['errors'] = [];
-    const [messageResult, whatsappResult] = await Promise.all([
-      configuration.messages ? dependencies.readers.listMessageThreads('').catch(error => { errors.push({ source: 'messages', message: cleanText(error instanceof Error ? error.message : String(error), 500) }); return { threads: [] }; }) : Promise.resolve({ threads: [] }),
-      configuration.whatsappConversation ? dependencies.readers.readWhatsAppConversation(configuration.whatsappConversation.jid).then(result => {
-        if (!result?.conversation || result.conversation.jid !== configuration.whatsappConversation?.jid) throw new Error('The selected WhatsApp conversation identity changed. Select it again.');
-        const currentLabel = cleanText(result.conversation.label, 200).trim();
-        if (currentLabel && currentLabel !== configuration.whatsappConversation.label) errors.push({ source: 'whatsapp',
-          message: `The selected WhatsApp conversation label changed from “${configuration.whatsappConversation.label}” to “${currentLabel}”. The stable JID still matches; review and reselect it if this was unexpected.` });
-        const rows = Array.isArray(result.observations) ? result.observations : [];
-        if (rows.some(row => row.threadJid !== configuration.whatsappConversation?.jid)) throw new Error('The selected WhatsApp conversation returned a different thread. Select it again.');
-        return { observations: rows };
-      }).catch(error => { errors.push({ source: 'whatsapp', message: cleanText(error instanceof Error ? error.message : String(error), 500) }); return { observations: [] }; }) : Promise.resolve({ observations: [] }),
+    const [messageResult, whatsappResults] = await Promise.all([
+      configuration.messages
+        ? dependencies.readers.listMessageThreads('').then(result => ({ threads: result.threads, errors: [] as MacMonitorSnapshot['errors'] }))
+          .catch(error => ({ threads: [], errors: [{ source: 'messages' as const, message: cleanText(error instanceof Error ? error.message : String(error), 500) }] }))
+        : Promise.resolve({ threads: [], errors: [] as MacMonitorSnapshot['errors'] }),
+      Promise.all(configuration.whatsappConversations.map(async target => {
+        try {
+          const result = await dependencies.readers.readWhatsAppConversation(target.jid);
+          if (!result?.conversation || result.conversation.jid !== target.jid) throw new Error(`The selected WhatsApp conversation identity changed for ${target.label}. Select it again.`);
+          const targetErrors: MacMonitorSnapshot['errors'] = [];
+          const currentLabel = cleanText(result.conversation.label, 200).trim();
+          if (currentLabel && currentLabel !== target.label) targetErrors.push({ source: 'whatsapp',
+            message: `The selected WhatsApp conversation label changed from “${target.label}” to “${currentLabel}”. The stable JID still matches; review and reselect it if this was unexpected.` });
+          const rows = Array.isArray(result.observations) ? result.observations : [];
+          if (rows.some(row => row.threadJid !== target.jid)) throw new Error(`The selected WhatsApp conversation ${target.label} returned a different thread. Select it again.`);
+          return { observations: rows, errors: targetErrors };
+        } catch (error) {
+          return { observations: [] as WhatsAppObservation[], errors: [{ source: 'whatsapp' as const,
+            message: cleanText(error instanceof Error ? error.message : String(error), 500) }] };
+        }
+      })),
     ]);
+    const errors = [...messageResult.errors, ...whatsappResults.flatMap(result => result.errors)].slice(0, MAX_WHATSAPP_CONVERSATIONS + 1);
     const messageThreads = (Array.isArray(messageResult.threads) ? messageResult.threads : []).slice(0, MAX_MESSAGES);
-    const whatsappObservations = (Array.isArray(whatsappResult.observations) ? whatsappResult.observations : []).slice(0, MAX_WHATSAPP);
-    const urgencyHints = hints(messageThreads, whatsappObservations);
+    // Preserve a bounded share for every explicitly selected conversation so a
+    // busy first thread cannot hide fresh observations from the remaining JIDs.
+    const perConversationLimit = Math.max(1, Math.floor(MAX_WHATSAPP / Math.max(1, whatsappResults.length)));
+    const whatsappObservations = whatsappResults.flatMap(result => result.observations.slice(0, perConversationLimit)).slice(0, MAX_WHATSAPP);
+    const urgencyHints = hints(messageThreads, whatsappObservations, configuration.keywords);
     return { observedAt: clock.now(), messageThreads, whatsappObservations,
       urgencyHints: baselineExisting ? [] : urgencyHints, errors };
   }

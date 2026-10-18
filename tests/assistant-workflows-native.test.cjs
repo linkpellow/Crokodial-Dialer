@@ -287,8 +287,16 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     assert.equal(await page.locator('iframe[title="Email preview"]').getAttribute('sandbox'), '');
     // Schedule this saved reply before exercising immediate submission of its exact revision.
     console.log('Native fixture: Conditional follow-up');
+    await app.evaluate(() => {
+      const draft = global.fixture.drafts[0];
+      draft.recipients.cc = [{ email: 'support@example.test', source: 'support_contact', supportContact: { planId: 'fixture-plan', id: 'support' } }];
+      draft.recipients.bcc = [{ email: 'audit@example.test', source: 'owner_provided' }];
+    });
     await back(); await shortcut('Follow-up').click();
     await page.getByLabel('Saved email draft', { exact: true }).selectOption('11111111-1111-4111-8111-111111111111');
+    await page.getByLabel('Exact email recipients').getByText('support@example.test', { exact: false }).waitFor();
+    await page.getByLabel('Exact email recipients').getByText('audit@example.test', { exact: false }).waitFor();
+    await page.getByLabel('Exact email recipients').getByText('configured plan support', { exact: false }).waitFor();
     await page.getByLabel(/^Send at/).fill('2030-10-19T10:00');
     await shortcut('Prepare scheduled email review').click();
     const approveFollow = shortcut('Approve this exact scheduled email');
@@ -398,7 +406,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     console.log('Native fixture: Approved tools');
     await back(); await shortcut('Assistant capabilities').click();
     await page.getByLabel('Calendar range start').fill('2030-10-19T10:00'); await page.getByLabel('Calendar range end').fill('2030-10-20T10:00');
-    await shortcut('Review calendar request').click(); await shortcut('Approve and read').click();
+    await shortcut('Review calendar request').click(); await shortcut('Approve exact read').click();
     await page.getByText(/Synthetic appointment/).waitFor();
     await page.getByText('Compute and measured model evidence', { exact: true }).click(); await page.getByText(/Hybrid execution is disabled/).waitFor();
     await shortcut('Assistant capabilities').click();

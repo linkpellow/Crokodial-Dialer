@@ -40,9 +40,9 @@ export async function getGmailStatus(): Promise<AssistantGmailStatus> {
 /** The browser receives a short-lived, one-use ticket; the native bearer never enters its URL. */
 export async function beginGmailConnection(requirement: boolean | GmailCapability[] = false): Promise<GmailConnection> {
   const requested = Array.isArray(requirement) ? [...new Set(requirement)] : undefined;
-  if (requested && (!requested.length || requested.some(item => !['send', 'history', 'mailbox_read'].includes(item)))) throw new Error('Unknown Gmail connection capability.');
+  if (requested && (!requested.length || requested.some(item => !['send', 'history', 'mailbox_read', 'modify'].includes(item)))) throw new Error('Unknown Gmail connection capability.');
   const capabilities = requested ? normalizeGmailCapabilities(requested) : undefined;
-  const history = capabilities ? capabilities.includes('history') || capabilities.includes('mailbox_read') : requirement;
+  const history = capabilities ? capabilities.includes('history') || capabilities.includes('mailbox_read') || capabilities.includes('modify') : requirement;
   const value = await apiRequest<GmailConnection>('/api/auth/google/mail/desktop/connect', { method: 'POST', body: JSON.stringify({ history, ...(capabilities ? { capabilities } : {}) }) });
   const origin = new URL(platformUrl('/')), url = new URL(value.authorizationUrl, origin);
   if (url.origin !== origin.origin || url.pathname !== '/api/auth/google/mail/desktop/authorize' || url.username || url.password || url.hash ||
@@ -133,6 +133,7 @@ export const searchToolContacts = (agentId: number, query: string) => workspaceR
 export const prepareAssistantTool = (agentId: number, input: AssistantToolRequest) => workspaceRequest<AssistantPreparedTool>(agentId, '/tools/requests', input);
 export const decideToolGrant = (agentId: number, grant: Pick<AssistantToolGrant, 'id' | 'revision' | 'payloadDigest'>, decision: 'approve' | 'reject') => workspaceRequest<{ grant: AssistantToolGrant }>(agentId, `/tools/grants/${id(grant.id)}/decision`, { revision: grant.revision, payloadDigest: grant.payloadDigest, decision });
 export const executeToolGrant = (agentId: number, grant: Pick<AssistantToolGrant, 'id' | 'revision' | 'payloadDigest'>) => workspaceRequest<{ grant: AssistantToolGrant }>(agentId, `/tools/grants/${id(grant.id)}/execute`, { revision: grant.revision, payloadDigest: grant.payloadDigest });
+export const reconcileToolGrant = (agentId: number, grant: Pick<AssistantToolGrant, 'id' | 'revision' | 'payloadDigest'>) => workspaceRequest<{ grant: AssistantToolGrant }>(agentId, `/tools/grants/${id(grant.id)}/reconcile`, { revision: grant.revision, payloadDigest: grant.payloadDigest });
 export const readQualification = (agentId: number) => workspaceRequest<AiQualificationReport>(agentId, '/qualification');
 
 export const listScreenshotRecords = (agentId: number) => workspaceRequest<{ records: ScreenshotRecordSummary[] }>(agentId, '/screenshot-records');

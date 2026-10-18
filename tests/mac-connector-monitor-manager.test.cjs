@@ -32,13 +32,17 @@ test('renderer manager delegates lifecycle to narrow main-process IPC and relays
   const authority = { agentId: 3, sessionId: 'active-session' }, transient = { bearerToken: 'TEST-token', ...authority };
   const states = [], unsubscribe = manager.subscribeMacMonitor(authority, value => states.push(value));
   await manager.resumeSavedMacMonitor(authority);
-  const whatsappConversation = { jid: '120363000000001@g.us', label: 'Synthetic Sales Team' };
-  await manager.startMacMonitor({ messages: true, whatsappConversation, intervalMinutes: 1 }, authority);
+  const whatsappConversations = [
+    { jid: '120363000000001@g.us', label: 'Synthetic Sales Team' },
+    { jid: '120363000000002@g.us', label: 'Synthetic Service Team' },
+  ];
+  const keywords = ['urgent', 'vip escalation'];
+  await manager.startMacMonitor({ messages: true, whatsappConversations, keywords, intervalMinutes: 1 }, authority);
   assert.equal(manager.macMonitorState().running, true);
   assert.deepEqual(calls.filter(item => item[0] !== 'subscribe'), [
     ['state', { authority: transient }],
     ['resume', { authority: transient }],
-    ['start', { configuration: { messages: true, whatsappConversation, intervalMinutes: 1 }, authority: transient }],
+    ['start', { configuration: { messages: true, whatsappConversations, keywords, intervalMinutes: 1 }, authority: transient }],
     ['state', { authority: transient }],
   ]);
   nativeState = { running: true, configuration: { messages: true, intervalMinutes: 1 }, snapshot: { observedAt: 2, messageThreads: Array(75).fill({}), whatsappObservations: Array(125).fill({}), urgencyHints: Array(25).fill({}), errors: [] } };
@@ -57,12 +61,26 @@ test('renderer manager delegates lifecycle to narrow main-process IPC and relays
 
 test('renderer rejects invalid configurations before invoking main and has no read or send primitive', async () => {
   const authority = { agentId: 3, sessionId: 'active-session' };
-  await assert.rejects(manager.startMacMonitor({ messages: false, intervalMinutes: 5 }, authority), /exact WhatsApp/);
+  await assert.rejects(manager.startMacMonitor({ messages: false, whatsappConversations: [], keywords: ['urgent'], intervalMinutes: 5 }, authority), /exact WhatsApp/);
   await assert.rejects(manager.startMacMonitor({ messages: true, intervalMinutes: 31 }, authority), /Select Messages/);
   await assert.rejects(manager.startMacMonitor({ messages: false, whatsappQuery: 'sales', intervalMinutes: 5 }, authority), /exact WhatsApp/);
-  await assert.rejects(manager.startMacMonitor({ messages: false, whatsappConversation: { jid: '', label: 'Sales' }, intervalMinutes: 5 }, authority), /exact WhatsApp/);
+  await assert.rejects(manager.startMacMonitor({ messages: false, whatsappConversations: [{ jid: '', label: 'Sales' }], keywords: ['urgent'], intervalMinutes: 5 }, authority), /exact WhatsApp/);
+  await assert.rejects(manager.startMacMonitor({ messages: true, whatsappConversations: [], keywords: [], intervalMinutes: 5 }, authority), /urgency keywords/);
+  await assert.rejects(manager.startMacMonitor({ messages: true, whatsappConversations: [], keywords: ['urgent', 'URGENT'], intervalMinutes: 5 }, authority), /urgency keywords/);
   assert.equal(calls.some(item => item[0] === 'start'), false);
   for (const forbidden of ['listMessageThreads', 'searchWhatsApp', 'send', 'write', 'execute']) assert.equal(forbidden in bridge, false);
+});
+
+test('renderer normalizes the former one-conversation monitor shape returned during migration', async () => {
+  const legacy = { messages: false, whatsappConversation: { jid: 'legacy@g.us', label: 'Legacy exact thread' }, intervalMinutes: 4 };
+  nativeState = { running: true, configuration: legacy, snapshot: { observedAt: 1, messageThreads: [], whatsappObservations: [], urgencyHints: [], errors: [] } };
+  await manager.resumeSavedMacMonitor({ agentId: 3, sessionId: 'active-session' });
+  assert.deepEqual(manager.macMonitorState().configuration, {
+    messages: false,
+    whatsappConversations: [legacy.whatsappConversation],
+    keywords: [...manager.DEFAULT_MAC_MONITOR_KEYWORDS],
+    intervalMinutes: 4,
+  });
 });
 
 test('renderer clears unbound legacy monitor settings without adopting or reading them', async () => {

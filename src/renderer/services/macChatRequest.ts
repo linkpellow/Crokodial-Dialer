@@ -1,16 +1,21 @@
-import type { MacContact, MacMessageThread, WhatsAppObservation } from './macConnectorTypes';
+import type { MacContact, MacContactChange, MacMessageThread, WhatsAppObservation } from './macConnectorTypes';
+
+type MacContactCreate = Extract<MacContactChange, { operation: 'create' }>;
+type MacContactUpdateChanges = Extract<MacContactChange, { operation: 'update' }>['changes'];
 
 export type MacChatRequest =
   | { kind: 'messages.read'; query: string }
   | { kind: 'whatsapp.read'; query: string }
   | { kind: 'contacts.search'; query: string; unknownNumber: boolean }
+  | { kind: 'contacts.create'; query: string; change: MacContactCreate }
+  | { kind: 'contacts.update'; query: string; changes: MacContactUpdateChanges }
   | { kind: 'messages.send'; target: string; text: string; phone?: string }
   | { kind: 'sms.compose'; phone: string; text: string };
 
 export type MacChatReadResult =
   | { kind: 'messages.read' | 'messages.send'; threads: MacMessageThread[] }
   | { kind: 'whatsapp.read'; observations: WhatsAppObservation[]; observedAt: number }
-  | { kind: 'contacts.search'; contacts: MacContact[] };
+  | { kind: 'contacts.search' | 'contacts.create' | 'contacts.update'; contacts: MacContact[] };
 
 export interface MacChatReadService {
   listMessageThreads(query?: string): Promise<{ threads: MacMessageThread[] }>;
@@ -19,6 +24,8 @@ export interface MacChatReadService {
 }
 
 const PHONE_PATTERN = /^\+?[0-9().\-\s]{7,40}$/;
+const EMAIL_PATTERN = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+const LOCAL_CONTACTS = '(?:(?:my|the)\\s+)?(?:mac|apple|icloud|local)\\s+(?:contacts?|address\\s+book)';
 
 function clean(value: string, max: number): string {
   return value
@@ -51,7 +58,10 @@ function trailingQuery(value: string, marker: RegExp): string {
 }
 
 function parseExactSend(source: string): MacChatRequest | null {
-  const compose = source.match(/^(?:please\s+)?(?:open|prepare|create|draft)\s+(?:an?\s+)?(?:unsent\s+)?(?:sms|text)(?:\s+message)?(?:\s+draft)?\s+(?:to|for)\s+(.+?)\s+(?:saying|that says|with(?:\s+the)?(?:\s+text|\s+message)?|:)\s+([\s\S]+)$/i);
+  // Generic “text”, “SMS”, and “send a message” requests belong to the
+  // server-owned CRM/Telnyx workflow. A saved turn gets a native write card
+  // only when it names Apple's local Messages surface unambiguously.
+  const compose = source.match(/^(?:please\s+)?(?:open|prepare|create|draft)\s+(?:an?\s+)?(?:unsent\s+)?(?:apple|mac|system)\s+messages\s+(?:compose|draft)\s+(?:on\s+(?:this|my)\s+mac\s+)?(?:to|for)\s+(.+?)\s+(?:saying|that says|with(?:\s+the)?(?:\s+text|\s+message)?|:)\s+([\s\S]+)$/i);
   if (compose) {
     const recipient = phone(compose[1]);
     const text = exactText(compose[2]);
@@ -59,10 +69,11 @@ function parseExactSend(source: string): MacChatRequest | null {
   }
 
   const patterns = [
-    /^(?:please\s+)?(?:send\s+(?:an?\s+)?(?:imessage|sms|text|message)\s+to|text|message|imessage)\s+(.+?)\s+(?:saying|that says|with(?:\s+the)?(?:\s+text|\s+message)?)\s+([\s\S]+)$/i,
-    /^(?:please\s+)?(?:send\s+(?:an?\s+)?(?:imessage|sms|text|message)\s+to|text|message|imessage)\s+([^:\n—]+?)\s*[:—]\s*([\s\S]+)$/i,
-    /^(?:please\s+)?send\s+(.+?)\s+(?:an?\s+)?(?:imessage|sms|text|message)\s+(?:saying\s+)?([\s\S]+)$/i,
+    /^(?:please\s+)?(?:send\s+(?:an?\s+)?imessage\s+to|imessage)\s+(.+?)\s+(?:saying|that says|with(?:\s+the)?(?:\s+text|\s+message)?)\s+([\s\S]+)$/i,
+    /^(?:please\s+)?(?:send\s+(?:an?\s+)?imessage\s+to|imessage)\s+([^:\n—]+?)\s*[:—]\s*([\s\S]+)$/i,
     /^(?:please\s+)?reply\s+(?:to\s+)?(.+?)\s+(?:in|using|via)\s+(?:apple\s+)?messages\s*[:,—-]?\s*([\s\S]+)$/i,
+    /^(?:please\s+)?(?:use|open)\s+(?:the\s+)?(?:apple|mac)\s+messages\s+(?:app\s+)?to\s+reply\s+(?:to\s+)?(.+?)\s*[:,—-]\s*([\s\S]+)$/i,
+    /^(?:please\s+)?in\s+(?:the\s+)?existing\s+(?:apple|mac)?\s*messages\s+(?:thread|conversation)\s+with\s+(.+?)\s*[:,—-]\s*(?:send|reply(?:\s+with)?)\s+([\s\S]+)$/i,
   ];
   for (const pattern of patterns) {
     const match = source.match(pattern);
@@ -71,6 +82,79 @@ function parseExactSend(source: string): MacChatRequest | null {
     if (target.length < 2 || !text) return null;
     const recipient = phone(target);
     return { kind: 'messages.send', target, text, ...(recipient ? { phone: recipient } : {}) };
+  }
+  return null;
+}
+
+function exactField(value: string, max: number): string | undefined {
+  const candidate = value.replace(/^[\s"'“”‘’:,—-]+|[\s"'“”‘’.,!?]+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!candidate || candidate.length > max || /[\u0000-\u001f\u007f]/.test(candidate)) return undefined;
+  return candidate;
+}
+
+function contactName(value: string): { firstName: string; lastName: string } | null {
+  const name = exactField(value.replace(/^(?:an?\s+)?(?:new\s+)?contact\s+(?:named|for)\s+/i, ''), 200);
+  if (!name) return null;
+  const parts = name.split(' '), firstName = parts.shift() ?? '', lastName = parts.join(' ');
+  return firstName.length <= 100 && lastName.length <= 100 ? { firstName, lastName } : null;
+}
+
+function labeledValue(details: string, label: string, max: number): string | undefined {
+  const boundary = '(?=\\s*(?:[,;]|\\band\\b|\\b(?:first\\s+name|last\\s+name|organization|company|email(?:\\s+address)?|phone|mobile|cell)(?:\\s+number)?\\b|$))';
+  const match = details.match(new RegExp(`\\b${label}\\b\\s*(?:(?:is|to|as)\\s+|[:=]\\s*)?(.+?)${boundary}`, 'i'));
+  return match ? exactField(match[1], max) : undefined;
+}
+
+function contactFields(details: string, update: boolean): MacContactUpdateChanges | MacContactCreate['contact'] | null {
+  const emails = [...details.matchAll(/\b(?:email(?:\s+address)?)\b\s*(?:(?:is|to|as)\s+|[:=]\s*)?([^\s,;]+@[^\s,;<>]+\.[^\s,;<>]+)/gi)]
+    .map(match => match[1].replace(/[.!?]+$/, '').toLowerCase()).filter(value => EMAIL_PATTERN.test(value));
+  const phones = [...details.matchAll(/\b(?:phone|mobile|cell)(?:\s+number)?\b\s*(?:(?:is|to|as)\s+|[:=]\s*)?(\+?[0-9][0-9().\-\s]{5,38}[0-9])/gi)]
+    .map(match => phone(match[1])).filter((value): value is string => Boolean(value));
+  const firstName = labeledValue(details, 'first\\s+name', 100);
+  const lastName = labeledValue(details, 'last\\s+name', 100);
+  const organization = labeledValue(details, '(?:organization|company)', 200);
+  if (update) {
+    const changes: MacContactUpdateChanges = {};
+    if (firstName !== undefined) changes.firstName = firstName;
+    if (lastName !== undefined) changes.lastName = lastName;
+    if (organization !== undefined) changes.organization = organization;
+    if (emails.length) changes.addEmails = [...new Set(emails)].slice(0, 10);
+    if (phones.length) changes.addPhones = [...new Set(phones)].slice(0, 10);
+    return Object.keys(changes).length ? changes : null;
+  }
+  return { firstName: firstName ?? '', lastName: lastName ?? '', ...(organization !== undefined ? { organization } : {}),
+    emails: [...new Set(emails)].slice(0, 10), phones: [...new Set(phones)].slice(0, 10) };
+}
+
+function parseContactMutation(source: string): MacChatRequest | null {
+  const local = new RegExp(LOCAL_CONTACTS, 'i');
+  if (!local.test(source)) return null;
+
+  const createPatterns = [
+    new RegExp(`^(?:please\\s+)?(?:create|add|save)\\s+(?:an?\\s+)?(?:new\\s+)?(?:mac|apple|icloud|local)\\s+contact\\s+(?:named|for)\\s+(.+?)(?:\\s+(?:with|having)\\s+([\\s\\S]+))?$`, 'i'),
+    new RegExp(`^(?:please\\s+)?(?:create|add|save)\\s+(.+?)\\s+(?:in|to)\\s+${LOCAL_CONTACTS}(?:\\s+(?:with|having)\\s+([\\s\\S]+))?$`, 'i'),
+    new RegExp(`^(?:please\\s+)?(?:in|to)\\s+${LOCAL_CONTACTS}\\s*[,;:]?\\s*(?:create|add|save)\\s+(?:an?\\s+)?(?:new\\s+)?contact\\s+(?:named|for)\\s+(.+?)(?:\\s+(?:with|having)\\s+([\\s\\S]+))?$`, 'i'),
+  ];
+  for (const pattern of createPatterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const name = contactName(match[1]), supplied = contactFields(match[2] ?? '', false) as MacContactCreate['contact'] | null;
+    if (!name || !supplied) return null;
+    const contact = { ...supplied, ...name };
+    const query = contact.emails?.[0] ?? contact.phones?.[0] ?? [contact.firstName, contact.lastName].filter(Boolean).join(' ') ?? contact.organization;
+    return query && query.length >= 2 ? { kind: 'contacts.create', query, change: { operation: 'create', contact } } : null;
+  }
+
+  const updatePatterns = [
+    new RegExp(`^(?:please\\s+)?(?:update|edit|change)\\s+(.+?)\\s+(?:in|on)\\s+${LOCAL_CONTACTS}\\s*(?:with|:|—|-)\\s*([\\s\\S]+)$`, 'i'),
+    new RegExp(`^(?:please\\s+)?(?:in|on)\\s+${LOCAL_CONTACTS}\\s*[,;:]?\\s*(?:update|edit|change)\\s+(.+?)\\s*(?:with|:|—|-)\\s*([\\s\\S]+)$`, 'i'),
+    new RegExp(`^(?:please\\s+)?(?:update|edit|change)\\s+(?:the\\s+)?(?:mac|apple|icloud|local)\\s+contact\\s+(?:named|for)\\s+(.+?)\\s*(?:with|:|—|-)\\s*([\\s\\S]+)$`, 'i'),
+  ];
+  for (const pattern of updatePatterns) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const query = exactField(match[1], 100), changes = contactFields(match[2], true) as MacContactUpdateChanges | null;
+    return query && query.length >= 2 && changes ? { kind: 'contacts.update', query, changes } : null;
   }
   return null;
 }
@@ -85,6 +169,9 @@ export function parseMacChatRequest(value: string): MacChatRequest | null {
 
   const send = parseExactSend(source);
   if (send) return send;
+
+  const contactMutation = parseContactMutation(source);
+  if (contactMutation) return contactMutation;
 
   if (/\bwhats\s*app\b/i.test(source) && /\b(?:find|search|look\s*up|check|read|show|scan)\b/i.test(source)) {
     const query = quoted(source)
@@ -125,7 +212,7 @@ export function parseMacChatRequest(value: string): MacChatRequest | null {
 }
 
 export async function runMacChatRead(request: Exclude<MacChatRequest, { kind: 'sms.compose' }>, service: MacChatReadService): Promise<MacChatReadResult> {
-  if (request.kind === 'contacts.search') {
+  if (request.kind === 'contacts.search' || request.kind === 'contacts.create' || request.kind === 'contacts.update') {
     const { contacts } = await service.searchContacts(request.query);
     return { kind: request.kind, contacts: contacts.slice(0, 100) };
   }

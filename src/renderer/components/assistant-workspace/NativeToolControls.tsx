@@ -2,7 +2,24 @@ import { useNativeWorkState } from './nativeWorkState';
 import { workspaceRequest } from '../../services/assistantWorkspaceApi';
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantActionRecord } from '../../services/assistantWorkspaceTypes';
-import type { AssistantPreparedTool, AssistantToolCapability, AssistantToolGrant } from '../../services/assistantWorkspaceTypes';
+import type {
+  AssistantPreparedTool, AssistantToolCapability, AssistantToolGrant, CalendarCreateArguments,
+  CalendarDeleteArguments, CalendarEventInput, CalendarReadArguments, CalendarUpdateArguments,
+} from '../../services/assistantWorkspaceTypes';
+
+const calendarTime = (value: CalendarEventInput['start']) => 'date' in value ? value.date : value.dateTime;
+function grantSummary(grant: AssistantToolGrant) {
+  if (grant.tool === 'calendar.google.read') {
+    const args = grant.args as CalendarReadArguments;
+    return `${new Date(args.start).toLocaleString()} – ${new Date(args.end).toLocaleString()}`;
+  }
+  if (grant.tool === 'calendar.google.delete') {
+    const args = grant.args as CalendarDeleteArguments;
+    return `Delete event ${args.eventId}${args.expectedRevision ? ` · revision ${args.expectedRevision}` : ''}`;
+  }
+  const args = grant.args as CalendarCreateArguments | CalendarUpdateArguments;
+  return `${grant.tool === 'calendar.google.create' ? 'Create' : `Update ${(args as CalendarUpdateArguments).eventId}`}: ${args.event.title} · ${calendarTime(args.event.start)} – ${calendarTime(args.event.end)}`;
+}
 
 export function NativeToolControls({ agentId, onActivity }: { agentId: number; onActivity?: () => void }) {
   const [capabilities, setCapabilities] = useState<AssistantToolCapability[]>([]);
@@ -67,6 +84,12 @@ export function NativeToolControls({ agentId, onActivity }: { agentId: number; o
       }
     });
   }
+  function reconcile(grant: AssistantToolGrant) {
+    return operate(async current => {
+      const data = await request<{ grant: AssistantToolGrant }>(`${base}/grants/${grant.id}/reconcile`, { revision: grant.revision, payloadDigest: grant.payloadDigest });
+      if (current()) replaceGrant(data.grant);
+    });
+  }
   function decideAction(decision: 'approve' | 'reject') {
     if (!action) return;
     return operate(async current => {
@@ -107,13 +130,15 @@ export function NativeToolControls({ agentId, onActivity }: { agentId: number; o
     </div>
     <div className="nativework-stack"><h4 className="nativework-strong">Calendar requests and receipts</h4>{grants.length === 0 && <p className="nativework-muted">No calendar requests yet.</p>}
       {grants.map(grant => <article key={grant.id} className="nativework-stack nativework-panel">
-        <p className="nativework-strong">{grant.destination}</p><p>{new Date(grant.args.start).toLocaleString()} – {new Date(grant.args.end).toLocaleString()}</p>
+        <p className="nativework-strong">{grant.destination}</p><p>{grantSummary(grant)}</p>
         <p>Status: {grant.state} · Approval expires {new Date(grant.expiresAt).toLocaleString()}</p>
         <p className="nativework-small nativework-muted">Request {grant.id} · Revision {grant.revision} · Digest {grant.payloadDigest.slice(0, 12)}</p>
-        {['pending', 'approved'].includes(grant.state) && <div className="nativework-row"><button disabled={busy} onClick={() => void decide(grant, 'approve')} className="nativework-primary">{grant.state === 'approved' ? 'Read approved range' : 'Approve and read'}</button><button disabled={busy} onClick={() => void decide(grant, 'reject')}>Reject</button></div>}
+        {['pending', 'approved'].includes(grant.state) && <div className="nativework-row"><button disabled={busy} onClick={() => void decide(grant, 'approve')} className="nativework-primary">{grant.state === 'approved' ? `Execute approved ${grant.tool === 'calendar.google.read' ? 'read' : 'change'}` : `Approve exact ${grant.tool === 'calendar.google.read' ? 'read' : 'change'}`}</button><button disabled={busy} onClick={() => void decide(grant, 'reject')}>Reject</button></div>}
+        {grant.state === 'unknown' && grant.tool !== 'calendar.google.read' && <button disabled={busy} onClick={() => void reconcile(grant)}>Reconcile exact provider receipt</button>}
         {grant.message && <p>{grant.message}</p>}
-        {grant.result && <div><p>Observed {new Date(grant.result.observedAt).toLocaleString()} · {grant.result.events.length} events{grant.result.truncated ? ' · More events exist; narrow the range.' : ''}</p>
+        {grant.result && 'events' in grant.result && <div><p>Observed {new Date(grant.result.observedAt).toLocaleString()} · {grant.result.events.length} events{grant.result.truncated ? ' · More events exist; narrow the range.' : ''}</p>
           <ul className="nativework-stack">{grant.result.events.map((event, index) => <li key={`${event.id}:${index}`}>{event.start} · {event.title}{event.allDay ? ' (all day)' : ''}</li>)}</ul></div>}
+        {grant.result && 'operation' in grant.result && <p>Provider receipt: {grant.result.operation} · event {grant.result.eventId} · {grant.result.reconciled ? 'reconciled' : 'confirmed'} at {new Date(grant.result.submittedAt).toLocaleString()}</p>}
       </article>)}
     </div>
   </section>;

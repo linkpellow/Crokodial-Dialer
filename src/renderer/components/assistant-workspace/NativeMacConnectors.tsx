@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { macConnectorService } from '../../services/macConnectorService';
 import type {
   MacConnectorReceipt,
@@ -13,7 +13,16 @@ import type {
   WhatsAppObservation,
 } from '../../services/macConnectorTypes';
 import { useNativeWorkState } from './nativeWorkState';
-import { startMacMonitor, stopMacMonitor, subscribeMacMonitor, type MacMonitorState, type WhatsAppMonitorConversation } from '../../services/macConnectorMonitorManager';
+import {
+  DEFAULT_MAC_MONITOR_KEYWORDS,
+  MAX_MAC_MONITOR_KEYWORDS,
+  MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS,
+  startMacMonitor,
+  stopMacMonitor,
+  subscribeMacMonitor,
+  type MacMonitorState,
+  type WhatsAppMonitorConversation,
+} from '../../services/macConnectorMonitorManager';
 
 function timeLabel(value: string | null): string {
   return value ? new Date(value).toLocaleString() : 'Time unavailable';
@@ -71,14 +80,25 @@ export function NativeMacConnectors({ agentId, sessionId, conversationKey, onAct
   const [smsText, setSmsText] = useState('');
   const [smsReview, setSmsReview] = useState<MacConnectorReview | null>(null);
   const [monitorMessages, setMonitorMessages] = useState(true);
-  const [monitorWhatsApp, setMonitorWhatsApp] = useState<WhatsAppMonitorConversation | null>(null);
+  const [monitorWhatsApp, setMonitorWhatsApp] = useState<WhatsAppMonitorConversation[]>([]);
+  const [monitorKeywords, setMonitorKeywords] = useState<string[]>([...DEFAULT_MAC_MONITOR_KEYWORDS]);
+  const [monitorKeywordInput, setMonitorKeywordInput] = useState('');
   const [monitorMinutes, setMonitorMinutes] = useState(5), [monitorState, setMonitorState] = useState<MacMonitorState>({ running: false });
+  const [monitorDirty, setMonitorDirty] = useState(false), monitorDirtyRef = useRef(false);
 
-  const dirty = Boolean(smsPhone || smsText || smsReview);
+  const dirty = Boolean(smsPhone || smsText || smsReview || monitorDirty || monitorKeywordInput);
   useNativeWorkState(dirty, busy);
+  const markMonitorDirty = () => { monitorDirtyRef.current = true; setMonitorDirty(true); };
+  const clearMonitorDirty = () => { monitorDirtyRef.current = false; setMonitorDirty(false); };
+  useEffect(() => { clearMonitorDirty(); }, [agentId, sessionId, conversationKey]);
   useEffect(() => subscribeMacMonitor({ agentId, sessionId }, value => {
     setMonitorState(value);
-    if (value.configuration?.whatsappConversation) setMonitorWhatsApp(value.configuration.whatsappConversation);
+    if (value.configuration && !monitorDirtyRef.current) {
+      setMonitorMessages(value.configuration.messages);
+      setMonitorWhatsApp(value.configuration.whatsappConversations);
+      setMonitorKeywords(value.configuration.keywords);
+      setMonitorMinutes(value.configuration.intervalMinutes);
+    }
     if (value.snapshot) onActivity?.();
   }), [agentId, sessionId, onActivity]);
 
@@ -152,6 +172,26 @@ export function NativeMacConnectors({ agentId, sessionId, conversationKey, onAct
     }, () => { void refreshSavedWrites(); onActivity?.(); });
   }
 
+  function addMonitorWhatsApp(target: WhatsAppMonitorConversation) {
+    if (monitorWhatsApp.some(item => item.jid === target.jid)) return;
+    if (monitorWhatsApp.length >= MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS) {
+      setError(`Choose at most ${MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS} WhatsApp conversations.`); return;
+    }
+    setError(''); setMonitorWhatsApp(current => [...current, target]); markMonitorDirty();
+  }
+
+  function addMonitorKeyword() {
+    const keyword = monitorKeywordInput.trim().replace(/\s+/g, ' ').toLowerCase();
+    if (!keyword || keyword.length > 64 || /[\u0000-\u001f\u007f]/.test(keyword)) {
+      setError('Enter an urgency keyword from 1 to 64 characters.'); return;
+    }
+    if (monitorKeywords.includes(keyword)) { setError('That urgency keyword is already selected.'); return; }
+    if (monitorKeywords.length >= MAX_MAC_MONITOR_KEYWORDS) {
+      setError(`Choose at most ${MAX_MAC_MONITOR_KEYWORDS} urgency keywords.`); return;
+    }
+    setMonitorKeywords(current => [...current, keyword]); setMonitorKeywordInput(''); setError(''); markMonitorDirty();
+  }
+
   const whatsAppMonitorChoices = whatsappMonitorTargets(whatsAppRows);
 
   return <section className="nativework-stack" aria-label="Mac connectors">
@@ -201,7 +241,10 @@ export function NativeMacConnectors({ agentId, sessionId, conversationKey, onAct
     <article className="nativework-stack nativework-panel" aria-label="WhatsApp read-only search">
       <h4 className="nativework-strong">WhatsApp · read only</h4><p className="nativework-muted">Searches a supported local WhatsApp store. This connector has no write or send operation.</p>
       <form className="nativework-row" onSubmit={event => { event.preventDefault(); void operate(() => macConnectorService.searchWhatsApp(whatsAppQuery), data => setWhatsAppRows(data.observations)); }}><label>Search local messages<input className="nativework-panel" required minLength={2} maxLength={100} value={whatsAppQuery} onChange={event => setWhatsAppQuery(event.target.value)}/></label><button disabled={busy || status?.whatsapp.state !== 'available'}>Search WhatsApp</button></form>
-      {whatsAppRows.length > 0 && <><div className="nativework-stack" aria-label="WhatsApp monitor conversation choices"><p className="nativework-strong">Choose one exact conversation to monitor</p><p className="nativework-small nativework-muted">The saved monitor binds to the stable JID shown here. Matching names or message text in other conversations will not be read.</p>{whatsAppMonitorChoices.map(target => <div className="nativework-panel" key={target.jid}><p><strong>{target.label}</strong></p><p className="nativework-small nativework-muted">Stable JID: {target.jid}</p><button type="button" disabled={busy} onClick={() => setMonitorWhatsApp(target)}>Select this exact conversation</button></div>)}</div><ul className="nativework-stack">{whatsAppRows.map(row => <li key={row.id} className="nativework-panel"><p className="nativework-strong">{row.threadTitle}</p><p className="nativework-small nativework-muted">{row.fromMe ? 'You' : row.sender || 'Participant'} · {timeLabel(row.sentAt)} · {row.threadJid}</p><p className="nativework-prewrap">{row.text || '(Attachment or rich message)'}</p></li>)}</ul></>}
+      {whatsAppRows.length > 0 && <><div className="nativework-stack" aria-label="WhatsApp monitor conversation choices"><p className="nativework-strong">Choose exact conversations to monitor</p><p className="nativework-small nativework-muted">Each saved selection binds to the stable JID shown here. Matching names or message text in other conversations will not be read. Choose up to {MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS}.</p>{whatsAppMonitorChoices.map(target => {
+        const selected = monitorWhatsApp.some(item => item.jid === target.jid);
+        return <div className="nativework-panel" key={target.jid}><p><strong>{target.label}</strong></p><p className="nativework-small nativework-muted">Stable JID: {target.jid}</p><button type="button" disabled={busy || selected || monitorWhatsApp.length >= MAX_MAC_MONITOR_WHATSAPP_CONVERSATIONS} onClick={() => addMonitorWhatsApp(target)}>{selected ? 'Conversation selected' : 'Add this exact conversation'}</button></div>;
+      })}</div><ul className="nativework-stack">{whatsAppRows.map(row => <li key={row.id} className="nativework-panel"><p className="nativework-strong">{row.threadTitle}</p><p className="nativework-small nativework-muted">{row.fromMe ? 'You' : row.sender || 'Participant'} · {timeLabel(row.sentAt)} · {row.threadJid}</p><p className="nativework-prewrap">{row.text || '(Attachment or rich message)'}</p></li>)}</ul></>}
     </article>
 
     <article className="nativework-stack nativework-panel" aria-label="New SMS compose handoff">
@@ -211,12 +254,13 @@ export function NativeMacConnectors({ agentId, sessionId, conversationKey, onAct
     </article>
 
     <article className="nativework-stack nativework-panel" aria-label="Local read monitor settings">
-      <h4 className="nativework-strong">Local read monitor</h4><p className="nativework-muted">While Crokodial Workspace is running, periodically check bounded Messages metadata and one explicitly selected WhatsApp conversation, even when its window is closed. Unchanged snapshots stay quiet. This monitor cannot send or modify anything.</p>
-      <label className="nativework-row"><input type="checkbox" checked={monitorMessages} onChange={event => setMonitorMessages(event.target.checked)}/>Watch recent Messages threads</label>
-      {monitorWhatsApp ? <div className="nativework-panel" role="group" aria-label="Selected WhatsApp monitor conversation"><p className="nativework-strong">Selected WhatsApp conversation</p><p>{monitorWhatsApp.label}</p><p className="nativework-small nativework-muted">Stable JID: {monitorWhatsApp.jid}</p><button type="button" disabled={busy} onClick={() => setMonitorWhatsApp(null)}>Remove WhatsApp selection</button></div> : <p className="nativework-small nativework-muted">No WhatsApp conversation selected. Search above, review the label and stable JID, then select one exact conversation.</p>}
-      <label>Check every (minutes)<input type="number" min={1} max={30} value={monitorMinutes} onChange={event => setMonitorMinutes(Number(event.target.value))}/></label>
-      <div className="nativework-row"><button type="button" disabled={busy || !monitorMessages && !monitorWhatsApp} onClick={() => void operate(() => startMacMonitor({ messages: monitorMessages, ...(monitorWhatsApp ? { whatsappConversation: monitorWhatsApp } : {}), intervalMinutes: monitorMinutes }, { agentId, sessionId }), setMonitorState)}>{monitorState.running ? 'Restart monitor with these settings' : 'Start monitor'}</button>{monitorState.running && <button type="button" disabled={busy} onClick={() => void operate(() => stopMacMonitor({ agentId, sessionId }), setMonitorState)}>Stop monitor</button>}</div>
-      {monitorState.running && <p role="status">Active every {monitorState.configuration?.intervalMinutes} minute{monitorState.configuration?.intervalMinutes === 1 ? '' : 's'}{monitorState.configuration?.whatsappConversation ? ` · WhatsApp: ${monitorState.configuration.whatsappConversation.label} (${monitorState.configuration.whatsappConversation.jid})` : ''}{monitorState.snapshot ? ` · last observed ${new Date(monitorState.snapshot.observedAt).toLocaleString()}` : ''}.</p>}{monitorState.error && <p role="alert">{monitorState.error}</p>}
+      <h4 className="nativework-strong">Local read monitor</h4><p className="nativework-muted">While Crokodial Workspace is running, periodically check bounded Messages metadata and explicitly selected WhatsApp conversations, even when its window is closed. Unchanged snapshots stay quiet. This monitor cannot send or modify anything.</p>
+      <label className="nativework-row"><input type="checkbox" checked={monitorMessages} onChange={event => { setMonitorMessages(event.target.checked); markMonitorDirty(); }}/>Watch recent Messages threads</label>
+      {monitorWhatsApp.length > 0 ? <div className="nativework-stack nativework-panel" role="group" aria-label="Selected WhatsApp monitor conversations"><p className="nativework-strong">Selected WhatsApp conversations ({monitorWhatsApp.length})</p>{monitorWhatsApp.map(target => <div className="nativework-row" key={target.jid}><span>{target.label}<br/><span className="nativework-small nativework-muted">Stable JID: {target.jid}</span></span><button type="button" disabled={busy} aria-label={`Remove ${target.label} (${target.jid})`} onClick={() => { setMonitorWhatsApp(current => current.filter(item => item.jid !== target.jid)); markMonitorDirty(); }}>Remove</button></div>)}</div> : <p className="nativework-small nativework-muted">No WhatsApp conversation selected. Search above, review each label and stable JID, then add one or more exact conversations.</p>}
+      <div className="nativework-stack nativework-panel" role="group" aria-label="Urgency keywords"><p className="nativework-strong">Urgency keywords ({monitorKeywords.length}/{MAX_MAC_MONITOR_KEYWORDS})</p><p className="nativework-small nativework-muted">Attention hints appear only for new inbound messages containing one of these exact words or phrases.</p><form className="nativework-row" onSubmit={event => { event.preventDefault(); addMonitorKeyword(); }}><label>Add urgency keyword<input className="nativework-panel" maxLength={64} value={monitorKeywordInput} onChange={event => { setMonitorKeywordInput(event.target.value); markMonitorDirty(); }}/></label><button disabled={busy || monitorKeywords.length >= MAX_MAC_MONITOR_KEYWORDS}>Add keyword</button></form><ul className="nativework-stack">{monitorKeywords.map(keyword => <li className="nativework-row" key={keyword}><span>{keyword}</span><button type="button" disabled={busy || monitorKeywords.length === 1} aria-label={`Remove urgency keyword ${keyword}`} onClick={() => { setMonitorKeywords(current => current.filter(item => item !== keyword)); markMonitorDirty(); }}>Remove</button></li>)}</ul></div>
+      <label>Check every (minutes)<input type="number" min={1} max={30} value={monitorMinutes} onChange={event => { setMonitorMinutes(Number(event.target.value)); markMonitorDirty(); }}/></label>
+      <div className="nativework-row"><button type="button" disabled={busy || !monitorMessages && monitorWhatsApp.length === 0} onClick={() => void operate(() => startMacMonitor({ messages: monitorMessages, whatsappConversations: monitorWhatsApp, keywords: monitorKeywords, intervalMinutes: monitorMinutes }, { agentId, sessionId }), value => { setMonitorState(value); clearMonitorDirty(); })}>{monitorState.running ? 'Restart monitor with these settings' : 'Start monitor'}</button>{monitorState.running && <button type="button" disabled={busy} onClick={() => void operate(() => stopMacMonitor({ agentId, sessionId }), value => { setMonitorState(value); clearMonitorDirty(); })}>Stop monitor</button>}</div>
+      {monitorState.running && <p role="status">Active every {monitorState.configuration?.intervalMinutes} minute{monitorState.configuration?.intervalMinutes === 1 ? '' : 's'}{monitorState.configuration?.whatsappConversations.length ? ` · WhatsApp (${monitorState.configuration.whatsappConversations.length}): ${monitorState.configuration.whatsappConversations.map(target => `${target.label} (${target.jid})`).join(', ')}` : ''} · keywords: {monitorState.configuration?.keywords.join(', ')}{monitorState.snapshot ? ` · last observed ${new Date(monitorState.snapshot.observedAt).toLocaleString()}` : ''}.</p>}{monitorState.error && <p role="alert">{monitorState.error}</p>}
       {!!monitorState.snapshot?.errors.length && <ul aria-label="Local monitor read errors">{monitorState.snapshot.errors.map((item, index) => <li key={`${item.source}-${index}`} role="alert">{item.source}: {item.message}</li>)}</ul>}
       {!!monitorState.snapshot?.urgencyHints.length && <div className="nativework-panel"><p className="nativework-strong">New keyword-based attention hints</p><p className="nativework-small nativework-muted">Heuristic only. Review the original conversation before acting.</p><ul>{monitorState.snapshot.urgencyHints.slice(0, 10).map(hint => <li key={hint.observationId}><strong>{hint.threadTitle}</strong> · {hint.keywords.join(', ')}<p className="nativework-prewrap">{hint.preview}</p></li>)}</ul></div>}
     </article>

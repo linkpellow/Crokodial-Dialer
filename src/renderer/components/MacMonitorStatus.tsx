@@ -10,10 +10,10 @@ export function MacMonitorStatus({ agentId, sessionId }: { agentId: number; sess
   const messages = state.snapshot?.messageThreads.length ?? 0, whatsapp = state.snapshot?.whatsappObservations.length ?? 0;
   const hints = state.snapshot?.urgencyHints ?? [];
   const readErrors = state.snapshot?.errors ?? [];
-  const target = state.configuration?.whatsappConversation;
+  const targets = state.configuration?.whatsappConversations ?? [];
   return <article className="assistant-work-card" aria-label="Local communication monitor">
     <div className="assistant-card-heading"><strong>Local read monitor</strong><span>{state.running ? 'Active' : 'Needs attention'}</span></div>
-    {state.error ? <p role="alert">{state.error}</p> : <p>Watching bounded local sources every {state.configuration?.intervalMinutes} minute{state.configuration?.intervalMinutes === 1 ? '' : 's'}{target ? `; WhatsApp is bound to ${target.label} (${target.jid})` : ''}. Latest snapshot: {messages} Messages thread{messages === 1 ? '' : 's'}, {whatsapp} WhatsApp observation{whatsapp === 1 ? '' : 's'}.</p>}
+    {state.error ? <p role="alert">{state.error}</p> : <p>Watching bounded local sources every {state.configuration?.intervalMinutes} minute{state.configuration?.intervalMinutes === 1 ? '' : 's'}{targets.length ? `; WhatsApp is bound to ${targets.length} exact conversation${targets.length === 1 ? '' : 's'}: ${targets.map(target => `${target.label} (${target.jid})`).join(', ')}` : ''}. Latest snapshot: {messages} Messages thread{messages === 1 ? '' : 's'}, {whatsapp} WhatsApp observation{whatsapp === 1 ? '' : 's'}.</p>}
     {!!readErrors.length && <ul>{readErrors.map((item, index) => <li key={`${item.source}-${index}`} role="alert">{item.source}: {item.message}</li>)}</ul>}
     {!!hints.length && <details><summary>{hints.length} new keyword-based attention hint{hints.length === 1 ? '' : 's'}</summary><p>Heuristic only; review the original conversation before acting.</p><ul>{hints.slice(0, 5).map(hint => <li key={hint.observationId}><strong>{hint.threadTitle}</strong> · {hint.keywords.join(', ')}</li>)}</ul></details>}
   </article>;

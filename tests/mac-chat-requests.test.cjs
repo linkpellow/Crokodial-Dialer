@@ -28,11 +28,31 @@ test('saved natural-language turns deterministically reconstruct bounded local r
   assert.equal(parseMacChatRequest('What are text messages?'), null);
 });
 
-test('send requests retain exact text and distinguish existing-thread review from recipient-only compose', () => {
-  assert.deepEqual(parseMacChatRequest('Text Link saying I will call tomorrow!'), { kind: 'messages.send', target: 'Link', text: 'I will call tomorrow!' });
-  assert.deepEqual(parseMacChatRequest('Send a message to 2694621403: Hello there.'), { kind: 'messages.send', target: '2694621403', text: 'Hello there.', phone: '2694621403' });
-  assert.deepEqual(parseMacChatRequest('Open an unsent SMS draft to 2694621403 saying Hello there.'), { kind: 'sms.compose', phone: '2694621403', text: 'Hello there.' });
-  assert.equal(parseMacChatRequest(`Text Link saying ${'x'.repeat(4_001)}`), null, 'Oversized exact content must not be silently truncated');
+test('generic SMS stays on the CRM/Telnyx path while explicit Apple Messages requests retain exact text', () => {
+  for (const generic of [
+    'Text Link saying I will call tomorrow!',
+    'Send a message to 2694621403: Hello there.',
+    'Send an SMS to Link saying Hello there.',
+    'Open an unsent SMS draft to 2694621403 saying Hello there.',
+  ]) assert.equal(parseMacChatRequest(generic), null, generic);
+  assert.deepEqual(parseMacChatRequest('iMessage Link saying I will call tomorrow!'), { kind: 'messages.send', target: 'Link', text: 'I will call tomorrow!' });
+  assert.deepEqual(parseMacChatRequest('Send an iMessage to 2694621403: Hello there.'), { kind: 'messages.send', target: '2694621403', text: 'Hello there.', phone: '2694621403' });
+  assert.deepEqual(parseMacChatRequest('Reply to Link in Apple Messages: Exact reply.'), { kind: 'messages.send', target: 'Link', text: 'Exact reply.' });
+  assert.deepEqual(parseMacChatRequest('Open an unsent Apple Messages compose on this Mac to 2694621403 saying Hello there.'), { kind: 'sms.compose', phone: '2694621403', text: 'Hello there.' });
+  assert.equal(parseMacChatRequest(`iMessage Link saying ${'x'.repeat(4_001)}`), null, 'Oversized exact content must not be silently truncated');
+});
+
+test('chat-triggered Contacts writes require explicit Mac or iCloud wording and preserve exact reviewed fields', () => {
+  assert.equal(parseMacChatRequest('Create Jane Doe in Crokodial contacts with email jane@example.test'), null);
+  assert.equal(parseMacChatRequest('Update Jane Doe with phone 2694621403'), null);
+  assert.deepEqual(parseMacChatRequest('Create Jane Doe in my iCloud Contacts with email jane@example.test and phone 2694621403'), {
+    kind: 'contacts.create', query: 'jane@example.test', change: { operation: 'create', contact: {
+      firstName: 'Jane', lastName: 'Doe', emails: ['jane@example.test'], phones: ['2694621403'],
+    } },
+  });
+  assert.deepEqual(parseMacChatRequest('In my Mac Contacts, update Jane Doe: organization Acme and email jane@acme.example'), {
+    kind: 'contacts.update', query: 'Jane Doe', changes: { organization: 'Acme', addEmails: ['jane@acme.example'] },
+  });
 });
 
 test('read controller calls only the requested read operation and enforces renderer bounds', async () => {
@@ -52,7 +72,7 @@ test('read controller calls only the requested read operation and enforces rende
 });
 
 test('native inline cards are reconstructed from the saved turn and expose no immediate send control', () => {
-  const message = 'Text Link saying Exact fixture message!';
+  const message = 'iMessage Link saying Exact fixture message!';
   const first = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-turn-1', text: message }));
   const reloaded = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-turn-1', text: message }));
   assert.equal(first, reloaded, 'Reloading the same persisted turn must reconstruct the same card');
@@ -62,16 +82,32 @@ test('native inline cards are reconstructed from the saved turn and expose no im
   assert.match(first, /Find existing Messages thread/);
   assert.doesNotMatch(first, /Submit this exact message once/, 'Execution exists only after a one-use native review is prepared');
 
-  const compose = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-turn-2', text: 'Open an unsent SMS draft to 2694621403 saying Draft fixture.' }));
+  const generic = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-generic', text: 'Text Link saying Exact CRM fixture message!' }));
+  assert.equal(generic, '', 'A generic saved SMS turn must not create a second native send path');
+  const numbered = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-number', text: 'Send an iMessage to 2694621403: One exact native path.' }));
+  assert.equal((numbered.match(/Find existing Messages thread/g) ?? []).length, 1);
+  assert.doesNotMatch(numbered, /recipient-only|compose handoff/i, 'One explicit Messages turn cannot expose a second actionable send path');
+
+  const compose = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-turn-2', text: 'Open an unsent Apple Messages compose on this Mac to 2694621403 saying Draft fixture.' }));
   assert.match(compose, /recipient-only/);
   assert.match(compose, /Review recipient-only compose handoff/);
   assert.doesNotMatch(compose, /Open recipient-only unsent compose/, 'The system handoff is unavailable until the review step completes');
   assert.equal(renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-turn-3', text: 'Explain deductibles' })), '');
+
+  const create = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-contact-create', text: 'Create Jane Doe in my iCloud Contacts with email jane@example.test and phone 2694621403' }));
+  assert.match(create, /Reviewed Mac Contacts create request/);
+  assert.match(create, /Check for possible local duplicates/);
+  assert.match(create, /Review exact local contact create/);
+  assert.doesNotMatch(create, /Apply this exact contact change once/, 'A create must be prepared before it can execute');
+  const update = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-contact-update', text: 'In my Mac Contacts, update Jane Doe: organization Acme' }));
+  assert.match(update, /Reviewed Mac Contacts update request/);
+  assert.match(update, /Find exact local contact/);
 });
 
 test('Personal Assistant mounts cards beside persisted user turns in the one permanent transcript', () => {
   const source = fs.readFileSync('src/renderer/components/PersonalAssistant.tsx', 'utf8');
-  assert.match(source, /conversationKey && sessionId && entry\.turn\.role === 'user' && <InlineMacRequestCard turnId=\{entry\.turn\.id\} requestId=\{entry\.turn\.requestId\} persisted=\{entry\.turn\.sequence !== undefined/);
+  assert.match(source, /conversationKey && sessionId && entry\.turn\.role === 'user'/);
+  assert.match(source, /<InlineMacRequestCard turnId=\{entry\.turn\.id\} requestId=\{entry\.turn\.requestId\} persisted=\{entry\.turn\.sequence !== undefined/);
   assert.match(source, /agentId=\{agentId\} sessionId=\{sessionId\} conversationKey=\{conversationKey\}/);
   assert.doesNotMatch(source, /new conversation|reset conversation/i);
 });

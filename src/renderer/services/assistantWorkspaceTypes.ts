@@ -3,7 +3,7 @@
  * No platform renderer or runtime dependency is imported into this native application. */
 
 
-export type AssistantActionKind = 'message.sms' | 'message.email' | 'notes.append' | 'preference.update' | 'quote.generate' | 'quote.sms' | 'quote.email' | 'lead.immediate_call' | 'appointment.reschedule' | 'appointment.cancel' | 'appointment.book' | 'appointment.no_show' | 'appointment.exception' | 'contact.create' | 'contact.update' | 'calendar.booking_link';
+export type AssistantActionKind = 'message.sms' | 'message.sms.schedule' | 'message.email' | 'notes.append' | 'preference.update' | 'quote.generate' | 'quote.sms' | 'quote.email' | 'lead.immediate_call' | 'appointment.reschedule' | 'appointment.cancel' | 'appointment.book' | 'appointment.no_show' | 'appointment.exception' | 'contact.create' | 'contact.update' | 'calendar.booking_link' | 'gmail.thread.modify';
 export type AssistantActionState = 'pending' | 'ready' | 'executing' | 'succeeded' | 'submitted' | 'failed' | 'unknown' | 'rejected' | 'expired';
 export interface AssistantActionRecord {
   id: string;
@@ -137,32 +137,58 @@ export interface ScreenshotRecordSummary { id: string; filename: string; state: 
 export interface ScreenshotRecord extends ScreenshotRecordSummary { text: string; extractionError: string | null; fields: ScreenshotFields; identity: { name?: string; email?: string; phone?: string }; preview: ScreenshotPreview | null }
 
 export interface CalendarReadArguments { start: string; end: string }
-export type AssistantToolRequest = { tool: 'calendar.google.read'; requestId: string; args: CalendarReadArguments } | { tool: 'crm.notes.append'; requestId: string; args: { contactId: number; note: string } };
+export type CalendarEventTime = { date: string } | { dateTime: string; timeZone?: string };
+export interface CalendarEventInput {
+  title: string; description?: string; location?: string; start: CalendarEventTime; end: CalendarEventTime;
+  attendees?: string[]; sendUpdates?: 'none' | 'all' | 'externalOnly';
+}
+export interface CalendarCreateArguments { event: CalendarEventInput }
+export interface CalendarUpdateArguments { eventId: string; expectedRevision?: string; event: CalendarEventInput }
+export interface CalendarDeleteArguments { eventId: string; expectedRevision?: string; sendUpdates?: 'none' | 'all' | 'externalOnly' }
+export type CalendarWriteArguments = CalendarCreateArguments | CalendarUpdateArguments | CalendarDeleteArguments;
+export type CalendarToolId = 'calendar.google.read' | 'calendar.google.create' | 'calendar.google.update' | 'calendar.google.delete';
+export type AssistantToolRequest =
+  | { tool: 'calendar.google.read'; requestId: string; args: CalendarReadArguments }
+  | { tool: 'calendar.google.create'; requestId: string; args: CalendarCreateArguments }
+  | { tool: 'calendar.google.update'; requestId: string; args: CalendarUpdateArguments }
+  | { tool: 'calendar.google.delete'; requestId: string; args: CalendarDeleteArguments }
+  | { tool: 'crm.notes.append'; requestId: string; args: { contactId: number; note: string } };
 export interface AssistantToolCapability {
-  id: 'calendar.google.read' | 'crm.notes.append' | 'gmail.read' | 'browser.control';
+  id: CalendarToolId | 'crm.notes.append' | 'gmail.read' | 'browser.control';
   name: string;
   effect: 'read' | 'write';
   available: boolean;
   reason: string;
   approval: 'per_request' | 'unavailable';
 }
+export interface CalendarEventSnapshot {
+  id: string; title: string; description: string; location: string; start: string; end: string;
+  startTimeZone: string | null; endTimeZone: string | null; allDay: boolean; status: string;
+  attendeeEmails: string[]; revision: string; updated: string | null;
+}
 export interface CalendarToolResult {
-  events: Array<{ id: string; title: string; start: string; end: string; allDay: boolean; status: string }>;
+  events: CalendarEventSnapshot[];
   total: number;
   truncated: boolean;
   observedAt: number;
 }
+export interface CalendarMutationResult {
+  operation: 'create' | 'update' | 'delete'; eventId: string; event: CalendarEventSnapshot | null;
+  submittedAt: number; reconciled: boolean;
+}
 export interface AssistantToolGrant {
   id: string;
-  tool: 'calendar.google.read';
+  requestKey: string;
+  tool: CalendarToolId;
   revision: number;
   payloadDigest: string;
   destination: string;
-  args: CalendarReadArguments;
+  args: CalendarReadArguments | CalendarWriteArguments;
+  targetSnapshot: CalendarEventSnapshot | null;
   state: 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'unknown' | 'expired';
   createdAt: number;
   expiresAt: number;
-  result: CalendarToolResult | null;
+  result: CalendarToolResult | CalendarMutationResult | null;
   message: string | null;
 }
 export type AssistantPreparedTool = { kind: 'grant'; grant: AssistantToolGrant } | { kind: 'action'; action: AssistantActionRecord };
@@ -263,6 +289,6 @@ export interface AiQualificationReport {
 export type AssistantGoalStatus = 'queued' | 'running' | 'waiting_input' | 'waiting_approval' | 'completed' | 'failed' | 'canceled' | 'budget_exhausted' | 'unknown';
 export type WorkspaceMessage = AssistantWorkspaceMessage;
 export type WorkspaceItem = AssistantWorkspaceItem;
-export interface AssistantGmailStatus { configured: boolean; connected: boolean; historyConnected: boolean; mailboxReadConnected?: boolean; mailboxAccountId?: string; mailboxEmail?: string; email?: string | null; connectUrl: string; historyConnectUrl: string }
-export interface GmailConnection { authorizationUrl: string; expiresAt: string; capabilities?: Array<'send' | 'history' | 'mailbox_read'>; oauthScopes?: string[] }
+export interface AssistantGmailStatus { configured: boolean; connected: boolean; historyConnected: boolean; mailboxReadConnected?: boolean; modifyConnected?: boolean; mailboxAccountId?: string; mailboxEmail?: string; email?: string | null; connectUrl: string; historyConnectUrl: string; modifyConnectUrl?: string }
+export interface GmailConnection { authorizationUrl: string; expiresAt: string; capabilities?: Array<'send' | 'history' | 'mailbox_read' | 'modify'>; oauthScopes?: string[] }
 export interface AiExecutionProgress { sequence: number; requestId: string; turnId: string; state: 'pending' | 'routing' | 'queued' | 'running' | 'fallback' | 'validation' | 'tool' | 'settled' | 'completed' | 'cached' | 'deferred' | 'canceled' | 'failed' | 'unknown'; channel: string; modelId?: string; provider?: string; reason?: string; maximumProviderChargeMicros?: number; actualProviderChargeMicros?: number | null; createdAt: number }

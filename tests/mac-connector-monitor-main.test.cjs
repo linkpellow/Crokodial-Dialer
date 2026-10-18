@@ -11,6 +11,8 @@ const { createAuthorizedMacConnectorMonitor, createMacConnectorMonitor, createFi
 after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
 const selected = { jid: '120363000000001@g.us', label: 'Synthetic Sales Team' };
+const selectedTwo = { jid: '120363000000002@g.us', label: 'Synthetic Service Team' };
+const defaultKeywords = ['urgent', 'asap', 'immediately', 'emergency', 'time sensitive', 'deadline', 'overdue', 'cancel today', 'need help', 'needs help'];
 const thread = (id, text, fromMe = false) => ({ id, title: `Thread ${id}`, participants: [], service: 'iMessage', lastMessage: text, lastMessageAt: '2030-01-01T00:00:00.000Z', lastMessageFromMe: fromMe });
 const observation = (id, text, fromMe = false, jid = selected.jid, title = selected.label) => ({
   id, threadId: `database-row-${jid}-${id}`, threadJid: jid, threadTitle: title,
@@ -31,7 +33,7 @@ const exactReader = (getRows, calls = []) => ({
   },
 });
 
-test('main-process monitor persists one exact WhatsApp JID, stays alive without a renderer and resumes after restart', async () => {
+test('main-process monitor persists exact WhatsApp JIDs and keywords, stays alive without a renderer and resumes after restart', async () => {
   const calls = [], listeners = [], scheduled = [], memory = memoryStorage();
   let messages = [thread('1', 'URGENT: client needs help'), ...Array.from({ length: 74 }, (_, index) => thread(`extra-${index}`, `${index}`))];
   let whatsapp = [observation('1', 'ASAP please review'), observation('2', 'urgent outgoing', true), ...Array.from({ length: 123 }, (_, index) => observation(`extra-${index}`, `${index}`))];
@@ -42,7 +44,7 @@ test('main-process monitor persists one exact WhatsApp JID, stays alive without 
   const clock = { now: () => 1234, schedule: (callback, delay) => { scheduled.push({ callback, delay }); return scheduled.length; }, cancel: () => {} };
   const monitor = createMacConnectorMonitor({ readers, storage: memory.storage, clock });
   const unsubscribe = monitor.subscribe(value => listeners.push(value));
-  const configuration = { messages: true, whatsappConversation: selected, intervalMinutes: 1 };
+  const configuration = { messages: true, whatsappConversations: [selected], keywords: defaultKeywords, intervalMinutes: 1 };
   const started = await monitor.start(configuration);
   assert.deepEqual(calls, [['messages', ''], ['whatsapp', selected.jid]]);
   assert.deepEqual(memory.saved(), configuration);
@@ -71,6 +73,35 @@ test('main-process monitor persists one exact WhatsApp JID, stays alive without 
   assert.equal(memory.saved(), undefined);
 });
 
+test('monitor reads multiple explicitly selected stable JIDs and uses only the configured urgency keywords', async () => {
+  const calls = [], memory = memoryStorage();
+  const rows = new Map([
+    [selected.jid, [observation('selected-one', 'VIP escalation required', false, selected.jid, selected.label)]],
+    [selectedTwo.jid, [observation('selected-two', 'urgent using an unselected default', false, selectedTwo.jid, selectedTwo.label)]],
+  ]);
+  const monitor = createMacConnectorMonitor({
+    readers: {
+      listMessageThreads: async () => ({ threads: [] }),
+      readWhatsAppConversation: async jid => {
+        calls.push(jid);
+        const target = jid === selected.jid ? selected : selectedTwo;
+        return { conversation: target, observations: rows.get(jid) ?? [] };
+      },
+    },
+    storage: memory.storage,
+    clock: { now: () => 1, schedule: () => 1, cancel: () => {} },
+  });
+  const configuration = { messages: false, whatsappConversations: [selected, selectedTwo], keywords: ['vip escalation'], intervalMinutes: 5 };
+  await monitor.start(configuration);
+  assert.deepEqual(calls, [selected.jid, selectedTwo.jid]);
+  assert.deepEqual(monitor.getState().snapshot.whatsappObservations.map(row => row.threadJid), [selected.jid, selectedTwo.jid]);
+  assert.deepEqual(monitor.getState().snapshot.urgencyHints.map(item => [item.threadId, item.keywords]), [[selected.jid, ['vip escalation']]]);
+  assert.deepEqual(memory.saved(), configuration);
+  await assert.rejects(monitor.start({ ...configuration, whatsappConversations: Array.from({ length: 21 }, (_, index) => ({ jid: `jid-${index}`, label: `Label ${index}` })) }), /at most 20/);
+  await assert.rejects(monitor.start({ ...configuration, whatsappConversations: [selected, selected], keywords: ['vip escalation'] }), /only once/);
+  await assert.rejects(monitor.start({ ...configuration, keywords: [] }), /1 to 20/);
+});
+
 test('same names and matching message text in another WhatsApp thread never cross the selected JID boundary', async () => {
   const otherJid = '120363000000002@g.us';
   let rows = [
@@ -82,7 +113,7 @@ test('same names and matching message text in another WhatsApp thread never cros
     readers: exactReader(() => rows, calls), storage: memory.storage,
     clock: { now: () => 1, schedule: () => 1, cancel: () => {} },
   });
-  await monitor.start({ messages: false, whatsappConversation: { ...selected, label: 'Duplicate display name' }, intervalMinutes: 5 });
+  await monitor.start({ messages: false, whatsappConversations: [{ ...selected, label: 'Duplicate display name' }], keywords: ['urgent'], intervalMinutes: 5 });
   assert.deepEqual(calls, [['whatsapp', selected.jid]], 'the free-text label and message body are never used as the read key');
   assert.deepEqual(monitor.getState().snapshot.whatsappObservations, []);
   assert.ok(monitor.getState().snapshot.errors.some(item => /different thread/.test(item.message)));
@@ -104,7 +135,7 @@ test('missing or changed WhatsApp identities fail closed while a label change on
     },
   };
   const monitor = createMacConnectorMonitor({ readers, storage: memoryStorage().storage, clock: { now: () => 1, schedule: () => 1, cancel: () => {} } });
-  await monitor.start({ messages: false, whatsappConversation: selected, intervalMinutes: 5 });
+  await monitor.start({ messages: false, whatsappConversations: [selected], keywords: ['urgent'], intervalMinutes: 5 });
   assert.deepEqual(monitor.getState().snapshot.whatsappObservations, []);
   assert.match(monitor.getState().snapshot.errors[0].message, /no longer available/);
   mode = 'changed'; await monitor.refresh();
@@ -113,7 +144,7 @@ test('missing or changed WhatsApp identities fail closed while a label change on
   mode = 'renamed'; await monitor.refresh();
   assert.deepEqual(monitor.getState().snapshot.whatsappObservations.map(row => [row.threadJid, row.threadTitle]), [[selected.jid, 'Renamed conversation']]);
   assert.match(monitor.getState().snapshot.errors[0].message, /label changed.*stable JID still matches/i);
-  assert.deepEqual(monitor.getState().configuration.whatsappConversation, selected, 'the reviewed label remains in the durable configuration');
+  assert.deepEqual(monitor.getState().configuration.whatsappConversations, [selected], 'the reviewed label remains in the durable configuration');
 });
 
 test('monitor stays quiet for unchanged observations and hints only inbound-like keyword matches', async () => {
@@ -126,7 +157,7 @@ test('monitor stays quiet for unchanged observations and hints only inbound-like
     clock: { now: () => 1, schedule: () => 1, cancel: () => {} },
   });
   monitor.subscribe(state => states.push(state));
-  await monitor.start({ messages: true, whatsappConversation: selected, intervalMinutes: 5 });
+  await monitor.start({ messages: true, whatsappConversations: [selected], keywords: defaultKeywords, intervalMinutes: 5 });
   assert.equal(monitor.getState().snapshot.urgencyHints[0].source, 'whatsapp');
   const count = states.length;
   await monitor.refresh();
@@ -147,11 +178,21 @@ test('monitor settings are encrypted and atomic; legacy query monitors fail clos
     decode: stored => Buffer.from(stored.slice('cipher:'.length), 'base64').toString('utf8'),
   };
   const file = createFileMacMonitorStorage(target, codec);
-  const configuration = { messages: true, whatsappConversation: selected, intervalMinutes: 5 };
+  const configuration = { messages: true, whatsappConversations: [selected], keywords: defaultKeywords, intervalMinutes: 5 };
   file.save(configuration);
   assert.deepEqual(file.load(), configuration);
   assert.equal(fs.statSync(target).mode & 0o777, 0o600);
   assert.doesNotMatch(fs.readFileSync(target, 'utf8'), /Synthetic Sales Team|120363/);
+
+  const legacySingle = { messages: false, whatsappConversation: selected, intervalMinutes: 6 };
+  file.save(legacySingle);
+  const singleConversation = createMacConnectorMonitor({ readers: exactReader(() => []), storage: file,
+    clock: { now: () => 1, schedule: () => 1, cancel: () => {} } });
+  const migrated = await singleConversation.resume();
+  assert.deepEqual(migrated.configuration, { messages: false, whatsappConversations: [selected], keywords: defaultKeywords, intervalMinutes: 6 });
+  assert.deepEqual(file.load(), migrated.configuration, 'the former one-conversation shape is rewritten in the current encrypted schema');
+  assert.doesNotMatch(fs.readFileSync(target, 'utf8'), /whatsappConversation|Synthetic Sales Team|120363/);
+  singleConversation.shutdown();
 
   fs.writeFileSync(target, JSON.stringify({ messages: true, intervalMinutes: 7 }), { mode: 0o600 });
   const messagesOnly = createMacConnectorMonitor({ readers: exactReader(() => []), storage: file, clock: { now: () => 1, schedule: () => 1, cancel: () => {} } });

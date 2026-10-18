@@ -118,5 +118,7 @@ test('mailbox search consent requests explicit capabilities without broadening o
  assert.deepEqual(requests.at(-1).body,{history:true,capabilities:['send','history','mailbox_read']});
  await api.beginGmailConnection(['history']);
  assert.deepEqual(requests.at(-1).body,{history:true,capabilities:['send','history']});
+ await api.beginGmailConnection(['modify']);
+ assert.deepEqual(requests.at(-1).body,{history:true,capabilities:['send','history','mailbox_read','modify']});
  const before=requests.length;await assert.rejects(api.beginGmailConnection(['unknown']),/Unknown Gmail/);assert.equal(requests.length,before);
 });
