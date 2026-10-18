@@ -115,3 +115,15 @@ fixtureTest('symlinked source cannot be omitted from the source digest', t => {
   fs.symlinkSync(path.join(f.source, 'src/main/main.ts'), path.join(f.source, 'src/main/linked.ts'));
   fails(f.run(), /cannot omit a symbolic link/);
 });
+
+fixtureTest('packaging may omit the non-runtime gitkeep placeholder', async t => {
+  const f = createFixture(t); write(f.source, 'dist-renderer/.gitkeep', '');
+  succeeds(f.run()); fs.unlinkSync(path.join(f.source, 'dist-renderer/.gitkeep')); await f.pack();
+  succeeds(f.run('--verify-bundle', f.bundle));
+});
+
+fixtureTest('the actual CommonJS PostCSS configuration is included in source identity', async t => {
+  const f = createFixture(t); write(f.source, 'postcss.config.cjs', 'module.exports = {};');
+  succeeds(f.run()); await f.pack(); write(f.source, 'postcss.config.cjs', 'module.exports = { plugins: [] };');
+  fails(f.run('--verify-bundle', f.bundle), /does not match current native source/);
+});

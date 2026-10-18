@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, relative, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -42,7 +42,7 @@ if (process.argv[2] === '--verify-bundle') {
     const entry = asar.statFile(archive, name, false);
     if (!entry || entry.files || entry.link) throw new Error(`Missing compiled application file: ${name}`);
   }
-  const names = asar.listPackage(archive).map(name => name.replace(/^\//, '')).filter(name => /^dist(?:-renderer|\/main)\//.test(name) && name !== manifestPath && !asar.statFile(archive, name).files);
+  const names = asar.listPackage(archive).map(name => name.replace(/^\//, '')).filter(name => /^dist(?:-renderer|\/main)\//.test(name) && name !== manifestPath && basename(name) !== '.gitkeep' && !asar.statFile(archive, name).files);
   if (names.some(name => asar.statFile(archive, name, false).link)) throw new Error('Packaged compiled files must not be symbolic links.');
   const compiled = digestEntries(names.map(name => [name, asar.extractFile(archive, name)]));
   if (identity.nativeSourceSha256 !== sourceDigest()) throw new Error('Packaged application does not match current native source.');
@@ -52,7 +52,7 @@ if (process.argv[2] === '--verify-bundle') {
   if (process.argv.length > 2) throw new Error('Use no arguments to record a build, or --verify-bundle <app>.');
   let sourceRevision = null;
   try { sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* Isolated staging can have no Git checkout. Source content remains hashed. */ }
-  const compiled = ['dist/main', 'dist-renderer'].flatMap(name => filesIn(resolve(root, name))).filter(path => relative(root, path) !== manifestPath);
+  const compiled = ['dist/main', 'dist-renderer'].flatMap(name => filesIn(resolve(root, name))).filter(path => relative(root, path) !== manifestPath && basename(path) !== '.gitkeep');
   if (requiredCompiled.some(name => !existsSync(resolve(root, name)) || !lstatSync(resolve(root, name)).isFile())) throw new Error('Build main, preload, platform configuration and renderer before recording identity.');
   const identity = { schemaVersion: 1, application: 'Crokodial Workspace', bundleIdentifier: pkg.build.appId, sourceRevision, nativeSourceSha256: sourceDigest(), compiledSha256: digestEntries(compiled.map(path => [relative(root, path), readFileSync(path)])), builtAt: new Date().toISOString() };
   writeFileSync(resolve(root, manifestPath), `${JSON.stringify(identity, null, 2)}\n`);
