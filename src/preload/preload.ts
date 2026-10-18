@@ -8,9 +8,12 @@ interface ApiFetchOptions {
 
 contextBridge.exposeInMainWorld('dialer', {
   nativeWindowControls: process.platform === 'darwin',
+  initialWorkspace: process.argv.includes('--workspace=assistant') ? 'assistant' : 'dialer',
   uploadRecordingSegment: (payload: unknown) => ipcRenderer.invoke('recording-upload-segment', payload),
   downloadRecordingAudio: (payload: unknown) => ipcRenderer.invoke('recording-download-audio', payload),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+  uploadAssistantScreenshot: (payload: unknown) => ipcRenderer.invoke('assistant-screenshot-upload', payload),
+  readAssistantScreenshot: (payload: unknown) => ipcRenderer.invoke('assistant-screenshot-read', payload),
   openBrochure: (planId: string) => ipcRenderer.invoke('compass-brochure', planId),
   clearAssistant: () => ipcRenderer.invoke('compass-clear'),
   compassRequest: (operation: 'plans' | 'chat', payload?: unknown) => ipcRenderer.invoke('compass-request', operation, payload),

@@ -3,6 +3,7 @@ import { compassRequest, openCompassBrochure, stopCompass } from './compass';
 import path from 'path';
 import fs from 'fs';
 import { allowWorkspaceMicrophone, createRecordingBridge } from './recordingBridge';
+import { createAssistantFiles } from './assistantFiles';
 
 // Never reuse or modify the installed Dialer's profile.
 app.setName('Crokodial Workspace');
@@ -178,6 +179,7 @@ function createWindow(): void {
     } : {}),
     alwaysOnTop: true,
     webPreferences: {
+      additionalArguments: process.argv.includes('--workspace=assistant') ? ['--workspace=assistant'] : [],
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
@@ -235,6 +237,15 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 }
 
 const recordingBridge = createRecordingBridge(PLATFORM_ORIGIN);
+const assistantFiles = createAssistantFiles(PLATFORM_ORIGIN);
+ipcMain.handle('assistant-screenshot-upload', (event, payload: unknown) => {
+  assertTrustedSender(event);
+  return assistantFiles.upload(payload);
+});
+ipcMain.handle('assistant-screenshot-read', (event, payload: unknown) => {
+  assertTrustedSender(event);
+  return assistantFiles.read(payload);
+});
 ipcMain.handle('recording-upload-segment', (event, payload: unknown) => {
   assertTrustedSender(event);
   return recordingBridge.upload(payload);
@@ -255,7 +266,7 @@ ipcMain.handle('api-fetch', async (event, payload: ApiFetchPayload) => {
     if (target.origin !== PLATFORM_ORIGIN || !target.pathname.startsWith('/api/') || target.username || target.password) throw new Error('Request is outside the configured Crokodial API.');
     const res = await fetch(url, {
       redirect: 'error',
-      signal: AbortSignal.timeout(target.pathname.includes('/test/message') ? 120000 : 30000),
+      signal: AbortSignal.timeout(/\/(?:test|conversation)\/message$/.test(target.pathname) || /\/artifacts\/generate$/.test(target.pathname) ? 120000 : 30000),
       method,
       headers: {
         'Content-Type': 'application/json',

@@ -54,8 +54,11 @@ function unresolvedPlanWords(message: string): string {
 /** Routing only chooses a capability. It never supplies policy facts or rates. */
 export function routeAssistantRequest(input: {
   message: string; history: ConversationTurn[]; families: InsurancePlan[];
-  products: CatalogProduct[]; research?: ResearchContext;
+  products: CatalogProduct[]; research?: ResearchContext; serverOwnedContext?: boolean;
 }): AssistantRoute {
+  // Current owner conversations resolve records, policy and action intent on
+  // the server. The legacy local quote planner cannot see those bindings.
+  if (input.serverOwnedContext) return { kind: 'platform' };
   const { message, history, products, research } = input;
   const families = [...input.families];
   for (const carrier of new Set(products.map(product => product.carrier).filter((value): value is string => Boolean(value)))) {

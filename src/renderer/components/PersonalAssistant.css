@@ -1,2 +1,13 @@
 .assistant-conversation-tools { display: flex; justify-content: flex-end; gap: 5px; padding: 5px 11px; border-bottom: 1px solid #ffffff0c; }
 .assistant-unified .assistant-transcript:empty { padding: 0; }
+.assistant-work-card { margin: 0 0 14px; border: 1px solid #b8e88838; background: #b8e88809; border-radius: 10px; padding: 11px; font-size: 11px; color: #e5eee0; overflow-wrap: anywhere; }
+.assistant-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: #d5efbf; }
+.assistant-card-heading strong { flex: 1; min-width: 90px; }
+.assistant-card-heading span { font-size: 9px; border: 1px solid #b8e88830; border-radius: 6px; padding: 3px 5px; }
+.assistant-work-card p { margin: 8px 0; line-height: 1.6; white-space: pre-wrap; }
+.assistant-card-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.assistant-card-buttons button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid #b8e88840; background: #b8e88815; border-radius: 7px; color: #d8f3bf; font-size: 10px; }
+.assistant-work-shortcuts { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 11px 0; }
+.assistant-work-shortcuts button { border: 1px solid #b8e88828; border-radius: 7px; padding: 5px 8px; color: #c9dfba; font-size: 10px; }
+.assistant-progress { font-size: 10px; color: #bed2b3; margin-bottom: 10px; }
+.assistant-progress p { padding-top: 5px; }

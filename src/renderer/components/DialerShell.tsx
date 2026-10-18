@@ -19,22 +19,23 @@ export function DialerShell({ onLogout }: { onLogout: () => void }) {
     if (typeof job.notes === 'string' && Number.isSafeInteger(job.notesRevision)) notes.receive({ contactId: job.contactId, notes: job.notes, notesRevision: job.notesRevision! });
   }));
   const capture = useSyncExternalStore(recording.subscribe, recording.getSnapshot);
-  const resourceGeneration = useRef(0);
+  const resourceGeneration = useRef(0), assistantPending = useRef(false);
   const [guardMessage, setGuardMessage] = useState('');
   useEffect(() => {
     const generation = ++resourceGeneration.current;
-    const guard = (event: BeforeUnloadEvent) => { if (recording.hasUnsavedAudio() || notes.isDirty()) { event.preventDefault(); event.returnValue = ''; } };
-    const clearGuard = registerNativeWorkGuard(() => recording.hasUnsavedAudio() || notes.isDirty());
+    const guard = (event: BeforeUnloadEvent) => { if (recording.hasUnsavedAudio() || notes.isDirty() || assistantPending.current) { event.preventDefault(); event.returnValue = ''; } };
+    const clearGuard = registerNativeWorkGuard(() => recording.hasUnsavedAudio() || notes.isDirty() || assistantPending.current);
     window.addEventListener('beforeunload', guard);
     return () => { clearGuard(); window.removeEventListener('beforeunload', guard); queueMicrotask(() => { if (resourceGeneration.current === generation) { recording.dispose(); notes.dispose(); } }); };
   }, [recording, notes]);
   const safeLogout = async () => {
+    if (assistantPending.current) { setGuardMessage('Finish or discard unsaved assistant work before signing out.'); setView('assistant'); return; }
     if (recording.hasUnsavedAudio()) { setGuardMessage('Stop recording and finish pending uploads before signing out.'); setView(notesMode); return; }
     if (!await notes.flushAll()) { setGuardMessage('Save or resolve your note drafts before signing out.'); setView(notesMode); return; }
-    if (recording.hasUnsavedAudio() || notes.isDirty()) { setGuardMessage('Finish pending recordings and notes before signing out.'); setView(notesMode); return; }
+    if (recording.hasUnsavedAudio() || notes.isDirty() || assistantPending.current) { setGuardMessage('Finish pending recordings and notes before signing out.'); setView(notesMode); return; }
     onLogout();
   };
-  const [view, setView] = useState<'dialer' | 'contacts' | 'assistant' | 'notes' | 'settings'>('dialer');
+  const [view, setView] = useState<'dialer' | 'contacts' | 'assistant' | 'notes' | 'settings'>(() => window.dialer?.initialWorkspace === 'assistant' ? 'assistant' : 'dialer');
   const [notesMode, setNotesMode] = useState<'notes' | 'contacts'>('notes');
   const openNotes = (mode: 'notes' | 'contacts') => { setNotesMode(mode); setView(mode); };
   const callActive = ['dialing', 'ringing', 'in_call', 'held'].includes(state.uiState);
@@ -47,7 +48,7 @@ export function DialerShell({ onLogout }: { onLogout: () => void }) {
           <DialerPage state={state} actions={actions} onLogout={() => void safeLogout()} onOpenSettings={() => setView('settings')} />
         </section>
         <section id="assistant-workspace" role="tabpanel" aria-labelledby="assistant-tab" hidden={view !== 'assistant'} className="workspace-panel">
-          <PersonalAssistant active={view === 'assistant'} callActive={callActive} callLabel={state.leadContext?.leadName || state.phoneNumber} onReturnToCall={() => setView('dialer')} />
+          <PersonalAssistant onPendingWorkChange={pending => { assistantPending.current = pending; }} active={view === 'assistant'} callActive={callActive} callLabel={state.leadContext?.leadName || state.phoneNumber} onReturnToCall={() => setView('dialer')} />
         </section>
         <section id="notes-workspace" role="tabpanel" aria-labelledby={notesMode === 'contacts' ? 'contacts-tab' : 'notes-tab'} hidden={view !== 'notes' && view !== 'contacts'} className="workspace-panel">
           <NotesWorkspace mode={notesMode} active={view === 'notes' || view === 'contacts'} calling={{ state, actions }} engine={engine} store={notes} recording={recording} onReturnToCall={() => setView('dialer')} />

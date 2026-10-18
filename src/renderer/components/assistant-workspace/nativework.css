@@ -1,0 +1,47 @@
+.nativework { min-width: 0; width: 100%; color: #e5eddf; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.nativework *, .nativework *::before, .nativework *::after { box-sizing: border-box; }
+.nativework .nativework-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+.nativework h2, .nativework h3, .nativework h4 { color: #eef6e8; margin: 0 0 6px; font-size: 14px; line-height: 1.4; }
+.nativework h2 { margin: 0; }
+.nativework h2:focus { outline: none; }
+.nativework p { margin: 6px 0; }
+.nativework section, .nativework aside, .nativework form, .nativework fieldset { min-width: 0; }
+.nativework label { display: block; min-width: 0; font-size: 12px; }
+.nativework input:not([type=checkbox]), .nativework select, .nativework textarea {
+  display: block; width: 100%; min-width: 0; max-width: 100%; margin: 4px 0 0; border: 1px solid #b7d68e38;
+  border-radius: 7px; padding: 8px; color: #e5eddf; background: #1a2c21; font: inherit;
+}
+.nativework input[type=file] { font-size: 11px; padding: 7px; }
+.nativework input[type=datetime-local], .nativework input[type=time], .nativework input[type=date] { color-scheme: dark; }
+.nativework input[type=checkbox] { flex: 0 0 auto; accent-color: #a8cf74; margin: 3px 6px 3px 0; }
+.nativework textarea { min-height: 90px; resize: vertical; }
+.nativework textarea[aria-label="HTML source"] { min-height: 150px; font-family: ui-monospace, monospace; font-size: 11px; }
+.nativework button { border: 1px solid #b7d68e38; border-radius: 7px; padding: 7px 9px; background: #233b28; color: #ddecbd; font: inherit; line-height: 1.4; text-align: left; cursor: pointer; max-width: 100%; white-space: normal; }
+.nativework button:hover:not(:disabled) { background: #304c30; border-color: #b7d68e75; }
+.nativework button:focus-visible, .nativework a:focus-visible, .nativework summary:focus-visible, .nativework input:focus-visible, .nativework select:focus-visible, .nativework textarea:focus-visible { outline: 2px solid #b4dc89; outline-offset: 2px; }
+.nativework button:disabled, .nativework fieldset:disabled { opacity: .55; cursor: default; }
+.nativework button.nativework-primary { background: #a4c77b; border-color: #b8df8a; color: #17301c; font-weight: 600; }
+.nativework fieldset { border: 0; margin: 0; padding: 0; }
+.nativework ul { list-style: none; padding: 0; margin: 0; }
+.nativework li { min-width: 0; }
+.nativework a { color: #bce393; }
+.nativework pre { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 8px 0; font-size: 11px; }
+.nativework details { min-width: 0; margin-top: 10px; }
+.nativework summary { cursor: pointer; color: #c4d4b8; }
+.nativework .nativework-stack > * + * { margin-top: 10px; }
+.nativework .nativework-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; }
+.nativework .nativework-row > label { flex: 1 1 130px; }
+.nativework .nativework-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 10px; }
+.nativework .nativework-panel { border: 1px solid #ffffff14; border-radius: 9px; padding: 10px; background: #ffffff03; }
+.nativework .nativework-small { font-size: 10px; }
+.nativework .nativework-muted { color: #a8b7a0; }
+.nativework .nativework-strong { font-weight: 600; }
+.nativework .nativework-prewrap { white-space: pre-wrap; }
+.nativework .nativework-error, .nativework [role=alert] { color: #ffc4b4; border-left: 2px solid #e8a897; padding-left: 8px; }
+.nativework .nativework-link { text-decoration: underline; }
+.nativework iframe { display: block; width: 100%; height: 290px; border: 1px solid #b7d68e38; border-radius: 7px; background: #fff; }
+.nativework .nativework-image { display: block; width: 100%; max-height: 240px; object-fit: contain; border: 1px solid #b7d68e38; border-radius: 7px; }
+.nativework dl { margin: 0; }
+.nativework dd { margin: 0; color: #ddecbd; }
+.nativework dt { color: #a8b7a0; }
+@media (prefers-reduced-motion: reduce) { .nativework * { scroll-behavior: auto; } }

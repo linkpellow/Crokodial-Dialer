@@ -20,6 +20,17 @@ const families = [
 const history = [];
 const route = (message, overrides = {}) => routeAssistantRequest({ message, history, families, products, ...overrides });
 
+test('current owner conversations keep saved context, advice, drafts and quote actions on the server', () => {
+  for (const message of [
+    'Quote my saved test client', 'Find a cheaper alternative for this client',
+    'Would the cheaper premium necessarily mean lower total costs?',
+    'Send this client the premium comparison', 'Text me the quote',
+    'Draft a text with this comparison', 'Compare premiums for HSA 3500 and 5000 HSA',
+    'What is the monthly premium for 5000-hsa age 35 employee in Florida?',
+    '35', 'employee only', 'What about age 42?',
+  ]) assert.deepEqual(route(message, { serverOwnedContext: true, research: { query: 'Quote HSA 3500 for age 35 employee' }, history: [{ role: 'user', text: 'Quote HSA 3500 for age 35 employee' }] }), { kind: 'platform' }, message);
+});
+
 test('coverage, contextual comparisons, states, Rx and service drafts all use shared verified plan knowledge', () => {
   for (const text of [
     'Does LIFEX cover specialist visits?', 'What about MedPerformance?', 'Which one has the better benefits?',

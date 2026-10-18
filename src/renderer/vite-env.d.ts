@@ -19,7 +19,10 @@ interface SerializedFetchResponse {
 }
 
 interface DialerAPI {
+  uploadAssistantScreenshot?: (payload: { agentId: number; requestId: string; filename: string; base64: string; token: string }) => Promise<SerializedFetchResponse>;
+  readAssistantScreenshot?: (payload: { agentId: number; recordId: string; token: string }) => Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; base64: string; contentType: string; errorBody?: string }>;
   readonly nativeWindowControls?: boolean;
+  readonly initialWorkspace?: 'assistant' | 'dialer';
   uploadRecordingSegment?: (payload: { contactId: number; sessionId: string; sequence: number; authorization: string; audio: ArrayBuffer; mimeType: string; startOffsetMs: number; endOffsetMs: number }) => Promise<SerializedFetchResponse>;
   downloadRecordingAudio?: (payload: { contactId: number; sessionId: string; sequence: number; authorization: string }) => Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: ArrayBuffer; errorBody?: string }>;
   openExternal?: (url: string) => Promise<void>;
