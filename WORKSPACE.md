@@ -9,13 +9,13 @@ Set the public `VITE_API_BASE` in the existing environment configuration and bui
 - Native sign-in uses `POST /api/auth/desktop/login` with `x-crokodial-desktop-client: crokodial-sms-desktop`, consuming the platform's `{data:{token,user}}` response. `/api/auth/me` restores the bearer session from its `{data:User}` response. The web cookie-only login route and browser sessions are not used.
 - `POST /api/dialer/voice-session` supplies short-lived tenant-authorized Telnyx tokens. The device identifier follows call logging. Token renewal waits until active calls finish. SIP passwords are never compiled into the renderer.
 - The assistant selects an existing `personal_assistant` from `GET /api/ai-agents`. Existing `sales` and `customer_service` modes are unchanged.
-- Private conversations use `/api/ai-agents/:id/test/session` and `/test/message`, with `audience: agent`. They retain platform context throughout navigation and are disposed when cleared or the signed-in workspace unmounts. They do not send customer communications. Conversation transcripts are held in memory, not written to local storage.
+- The assistant first reads `/api/ai-agents/:id/intelligence/status`. When available, authenticated owner conversations use `/conversation/session` and `/conversation/message`, with a unique request ID and the server’s action policies. Only the exact server-level `404 NOT_FOUND: API endpoint not found` selects the older `/test/session` and `/test/message` contract before creating a session. Legacy messages explicitly use `audience: agent` and remain private previews; they do not establish executed owner actions. Missing-agent, permission, malformed-status and connection errors do not select legacy mode. A session keeps its chosen contract, and a failed POST is never retried through another route. With the current owner routes, an opaque conversation key restores owner-, tenant-, environment- and agent-scoped server context after navigation/restart. The browser stores an opaque conversation key; owner transcripts are retained on the server for up to 30 days of inactivity; legacy preview sessions expire after 24 hours. `session` memory uses session storage; `conversation`/`persistent` use local storage; `none` does not restore conversation context. Separately, an owner-, tenant-, environment- and agent-scoped local retry journal retains only request UUID, message hash, conversation key and creation time, never message text. Unresolved request identities survive restart and memory-mode boundaries without automatic expiry or resend; an explicit retry of the same message in the same conversation reuses its identity. Explicit reset deletes server context and rotates the conversation key while preserving unresolved receipt metadata. Conversation history alone never authorizes customer communications.
 - Plan names, variations and current guidance use `/api/insurance-plans` and `/api/insurance-plans/:id`. The same owner-scoped plan instructions, current announcements (including customer-effective-date scope), support contacts and document status are visible in both assistant services. `/plans` and `/ai-assistants` open the actual platform configuration pages.
 - Requests carry contract version `2026-02-26.1`, matching the platform shared contract.
 
 ## Preserved Quotes Compass engine
 
-Insurance research runs the existing Quotes Compass `runAssistantChat` orchestrator inside a private Node child process. It reuses its original quote, comparison, benefits, formulary and brochure modules/data; no HTTP server or second Electron app is started. Clicking a cited plan opens its original brochure. The child's conversation state survives navigation, and is cleared when the signed-in workspace closes. Golden Rule household quotes are refused because the source's specialized quote engine prices individuals only.
+For deployments using the legacy private-preview contract, insurance research can run the existing Quotes Compass `runAssistantChat` orchestrator inside a private Node child process. Current authenticated owner sessions route questions, quote requests and action intent through the platform instead. It reuses its original quote, comparison, benefits, formulary and brochure modules/data; no HTTP server or second Electron app is started. Clicking a cited plan opens its original brochure. The child's conversation state survives navigation, and is cleared when the signed-in workspace closes. Golden Rule household quotes are refused because the source's specialized quote engine prices individuals only.
 
 Source resolution uses `CROKODIAL_COMPASS_SOURCE` when explicitly set, then the packaged/staged snapshot, then the original `/Volumes/Lacie/Repos/quotes compass` checkout. Build the bundled snapshot with:
 
@@ -27,7 +27,7 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dir
 
 The staging script copies source code, insurance data and the required greeting helper. It excludes `.env`, credentials, caches, wake models and voice training corpora. Source PDFs and extracted text are retained for citations. Refresh the snapshot when authoritative plan data changes. Runtime credentials are never copied into the bundle. An explicit source override retains that source's existing private runtime configuration in the child process only.
 
-The Personal Assistant uses one conversation without mode or plan selectors. Natural plan and benefit questions, plan operations, support drafts and shared tools use the platform. The platform resolves family/variation names from owner-scoped catalog metadata and retrieves each selected variation separately; ambiguous variations require clarification. Questions about premiums and cheaper alternatives use the preserved Compass rate tools with explicit applicant inputs. A bounded history of prior user questions carries plan context between these capabilities; it is retrieval context, not an action authorization or policy evidence. Source catalog rates should be checked against current carrier documentation before use.
+The Personal Assistant uses one conversation without mode or plan selectors. Current authenticated owner sessions send plan and benefit questions, premiums and cheaper-alternative requests, support drafts and action intent to the platform, which resolves saved context and permissions before responding. The platform resolves family/variation names from owner-scoped catalog metadata and retrieves each selected variation separately; ambiguous variations require clarification. Only the legacy private-preview route uses the local Compass rate tools with explicit applicant inputs. A bounded history of prior user questions carries plan context; it is retrieval context, not an action authorization or policy evidence. Source catalog rates should be checked against current carrier documentation before use.
 
 ## Workspace Notes
 
@@ -57,6 +57,19 @@ The Notes fixture uses actual Electron MediaRecorder with synthetic WebAudio str
 
 ## Verification and launch
 
+### Context, goals and reconnection
+
+The assistant keeps the original conversation interface. Relationship memory and bounded goals run behind ordinary messages, with server-owned permissions and evidence. There are no additional context panels, environment banners, memory controls or goal setup steps. Relationship memory requires the server's `persistent` mode and feature controls. Restoring an opaque key in `conversation` mode resumes that same conversation only; it does not enable memory across conversations. Unknown action outcomes are not retried automatically. Platform migrations 224–227 and matching owner/intelligence routes are required for these capabilities. Compatibility with an older deployment restores basic private preview chat only; it does not claim cross-session memory, durable goals or authorized execution on that deployment.
+
+Boot session checks retry transient connection/408/429/5xx failures at 1, 3 and 10 seconds; online/focus or Retry connection can resume after that bounded budget. Invalid sessions return to sign-in, canceled checks cannot clear a replacement sign-in, and mutations are never retried by this mechanism.
+
+```sh
+node --test tests/session-recovery.test.cjs tests/assistant-session-api.test.cjs
+npm run test:native
+```
+
+The native fixture verifies recovery from transport and 503 failures and conversation key continuity across reload/reset using synthetic data and isolated responses. The Personal Assistant keeps its original native shell and adds inline workflow cards and editors. It does not claim a live provider or production deployment was tested.
+
 ```sh
 npm run typecheck
 npm run test:insurance
@@ -66,7 +79,7 @@ node tests/native-appointments.test.cjs
 npm start
 ```
 
-`test:insurance` verifies the real staged catalog, a source premium, a source formulary comparison, brochure resolution, unknown-product handling and individual-only Golden Rule protection. `test:native` starts the actual Electron app in a disposable profile; all platform requests are isolated fixtures and no calls or external messages are sent. It checks the desktop login route/header/envelope, invalid-login errors, bearer restoration after reload, invalidated-session cleanup, call-audio element continuity, retained dial input/drafts, pending-request navigation, automatic plan routing, persistent sessions, asynchronous reset isolation, conversation context across capabilities, and a real packaged insurance-engine quote. Screenshots go to ignored `artifacts/`.
+`test:insurance` verifies the real staged catalog, a source premium, a source formulary comparison, brochure resolution, unknown-product handling and individual-only Golden Rule protection. `test:native` starts the actual Electron app in a disposable profile; all platform requests are isolated fixtures and no calls or external messages are sent. It checks the desktop login route/header/envelope, invalid-login errors, bounded auth recovery, bearer restoration after reload, invalidated-session cleanup, call-audio element continuity, retained dial input/drafts, pending-request navigation, server-owned quote/context/action routing, conversation-key restoration, asynchronous reset isolation, and user-only plan history. Its owner-route replies are isolated fixtures; real insurance-engine quotes are checked separately by `test:insurance` and the application sandbox. Screenshots go to ignored `artifacts/`.
 
 The packaged Apple Silicon app is `release/mac-arm64/Crokodial Workspace.app`. A local build can be run without replacing any installed application. Signed distribution and notarization require the organization's signing identity.
 
@@ -74,7 +87,7 @@ Production verification on 2026-10-12 UTC confirmed successful desktop sign-in i
 
 ## Verification limits
 
-Live tenant login and Plans retrieval are verified above. Telnyx calls and complete end-to-end platform AI behavior have not been verified by the native smoke suite. The original Quotes Compass wake-word, microphone calibration and voice playback shell is not embedded; the unified panel currently preserves its text-based insurance tools and source citations. Open-ended local replies require the existing Ollama runtime/models. Private in-memory conversations intentionally reset on app restart or logout. These limitations must not be reported as production parity.
+Live tenant login and Plans retrieval are verified above. Telnyx calls and complete end-to-end platform AI behavior have not been verified by the native smoke suite. The original Quotes Compass wake-word, microphone calibration and voice playback shell is not embedded; the unified panel currently preserves its text-based insurance tools and source citations. Open-ended local replies require the existing Ollama runtime/models. Local insurance-engine context remains process-local. Server-backed owner conversations use the scoped restoration and memory-mode boundaries described above. These limitations must not be reported as production parity.
 
 ## Dependency security review
 
@@ -162,3 +175,38 @@ Verification passed: 54 focused contact tests; all 4,363 Core tests across 308 s
 Railway deployment `a87ae91b-4c31-46ea-8ccf-ca0afe5f7646` succeeded. The production read-only verifier confirmed four compiled hashes, schema/integrity, 226 migration fingerprints, nine indicator cases and 11 filter cases. All ten public health/authentication checks passed. Bounded current/prior log comparison found no new failure category; checkpoint-lock and Telnyx processing warnings pre-existed. A verified production database backup was taken before deployment.
 
 The native app was installed at `release/mac-arm64/Crokodial Workspace.app`; `app.asar` SHA-256 is `1f74dadacbd7c6d14b833cdb8f60095acf5dcd6cb4815242ca53b8e238d05c6a`. Four packaged main/preload/renderer hashes match the clean build, and strict deep signature validation passed. The previous app is retained at `release/backups/workspace-before-2506cd1/Crokodial Workspace.app`. Live inspection confirmed restored sign-in, actual contacts, the sliders icon and the five-field popover. Apply/Reset were verified in the Electron fixtures; further live clicks stopped when app state changed during inspection. No customer records, calls or recordings were modified. Sanitized release evidence is in the platform repository at `private-sms-app/docs/unified-desktop/workspace-filter-sort-production-rollout.json`.
+
+## Native Personal Assistant workflows (October 18 repair)
+
+This is the native Dialer / Personal Assistant application (`com.crokodial.workspace`), not the retired platform SMS Electron client. The supporting platform is the sibling `CrokodialSMS-1/private-sms-app` repository. Shared backend features are not native UI verification by themselves.
+
+The native conversation restores owner-scoped history and combines saved action receipts with inline work cards. It uses the existing server policies and request UUID ledger. An accepted answer remains visible if a subsequent history read fails; unknown outcomes require explicit retry using the original request identity. Execution progress describes observed request/response stages, not inferred tool execution or email delivery.
+
+- Gmail: a disconnected mailbox displays **Connect Gmail** inside the assistant. Native bearer authentication obtains a one-use, owner-bound browser link for Google consent. It does not require a separate Crokodial web login or expose the bearer in a URL. Returning to the app refreshes mailbox status and resumes the pending email editor. Reply/follow-up history requires separate explicit consent.
+- Email: saved drafts, contact selection, corrections, rich formatting, small attachments and linked-thread replies use the platform's revision and digest checks. Review and approval apply to exact content; submitted means provider submission, not confirmed delivery.
+- Follow-ups: conditional no-reply tasks reuse the existing thread history, scheduling, expiry and pause/resume/cancel controls. They require a connected mailbox with history permission.
+- Screenshots: native multipart image upload, OCR extraction, client matching, field conflict review and exact-preview approval produce a saved CRM receipt. Image transfer is restricted to trusted top-level IPC and fixed platform routes.
+- Artifacts: immutable saved versions and an explicit interactive preview. The preview has an opaque origin, no native bridge or same-origin permission, and blocked external resources.
+- Background work and approved tools: bounded tasks, calendar/contact/note operations and measured qualification evidence use existing platform services. Unsaved editor changes and pending work block silent discard and normal close/logout; tabs preserve mounted state. Forced termination or forced session invalidation cannot preserve unsaved in-memory content.
+
+Verification commands:
+
+```sh
+npm run typecheck
+npm run build
+node --test tests/assistant-files.test.cjs tests/assistant-workspace-api.test.cjs tests/assistant-session-api.test.cjs tests/session-recovery.test.cjs
+node tests/native-workspace.test.cjs
+node tests/assistant-workflows-native.test.cjs
+```
+
+For end-to-end native-to-server verification, run `npx tsx scripts/verify-native-assistant-workflows.ts` from the supporting platform. It stages this native app against disposable Express/SQLite services, uses actual OCR and native IPC, and controls only model/Google responses. It makes no external email submissions or paid model calls. Live Gmail consent and live delivery are separate from this fixture evidence.
+
+`npm run build` writes `dist/main/workspace-build.json` with source and compiled-file digests. After packaging, run:
+
+```sh
+node scripts/workspace-build-identity.mjs --verify-bundle 'release/mac-arm64/Crokodial Workspace.app'
+node ../CrokodialSMS-1/scripts/workspace-app.mjs --check
+node ../CrokodialSMS-1/scripts/workspace-app.mjs --open
+```
+
+The checked launcher refuses a different application or stale compiled source. It preserves the existing `Crokodial Workspace` profile. A matching build digest establishes identity and freshness; the separate native workflow tests establish behavior.
