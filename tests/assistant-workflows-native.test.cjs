@@ -20,7 +20,14 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
       // No provider network request may escape this fixture process.
       session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => callback({ cancel: true }));
       const now = Date.now(), hash = 'a'.repeat(64);
-      global.fixture = { requests: [], opened: [], connected: false, historyConnected: false, conversationKey: 'main:11:9:sandbox', sessionId: 'fixture-main-session', historyReads: [], messages: [], drafts: [], followUps: [], artifacts: [], tasks: [], grants: [], screenshots: [], failNextMessage: false, messageReceipts: new Map(), uploads: [], reads: [] };
+      global.fixture = {
+        requests: [], opened: [], connected: false, historyConnected: false,
+        workspaceConnected: false, workspaceCapabilities: [], workspaceGrants: [],
+        contactsConnected: false, contactsCapabilities: [], contactsGrants: [],
+        calendarConnected: false, calendlyConnected: false,
+        conversationKey: 'main:11:9:sandbox', sessionId: 'fixture-main-session', historyReads: [], messages: [], drafts: [], followUps: [], artifacts: [], tasks: [], grants: [], screenshots: [],
+        businessActions: [], failNextMessage: false, messageReceipts: new Map(), uploads: [], reads: [],
+      };
       const f = global.fixture, action = (id, summary) => ({ id, agentId: 7, kind: 'message.email', state: 'pending', summary, result: null, createdAt: now, expiresAt: now + 3600000 });
       const reply = (data, status = 200) => ({ ok: status < 400, status, statusText: 'Isolated fixture', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(status < 400 ? { success: true, data } : { success: false, error: { code: 'FIXTURE', message: data } }) });
       const activity = () => [
@@ -41,6 +48,46 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         if (p === '/api/phone-numbers' || p === '/api/appointments') return reply([]);
         if (p === '/api/auth/google/mail/status') return reply({ configured: true, connected: f.connected, historyConnected: f.historyConnected, connectUrl: '/api/auth/google/mail/connect', historyConnectUrl: '/api/auth/google/mail/history/connect' });
         if (p === '/api/auth/google/mail/desktop/connect') return reply({ authorizationUrl: `${url.origin}/api/auth/google/mail/desktop/authorize?ticket=fixture-once-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString() });
+        if (p === '/api/auth/google/workspace/status') return reply({ provider: 'google_workspace', configured: true, connected: f.workspaceConnected, email: f.workspaceConnected ? 'workspace@example.test' : null, generation: f.workspaceConnected ? 'workspace-1' : null, capabilities: f.workspaceCapabilities, missingCapabilities: ['drive_read', 'sheets_read', 'sheets_write'].filter(item => !f.workspaceCapabilities.includes(item)) });
+        if (p === '/api/auth/google/workspace/desktop/connect') return reply({ authorizationUrl: `${url.origin}/api/auth/google/workspace/desktop/authorize?ticket=fixture-workspace-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString(), capabilities: b.capabilities, oauthScopes: ['drive.metadata.readonly', 'spreadsheets'] });
+        if (p === '/api/ai-agents/7/google-workspace/grants') return reply({ grants: f.workspaceGrants });
+        if (p.includes('/google-workspace/grants/')) {
+          const grant = f.workspaceGrants.find(item => p.includes(item.id)); if (!grant) return reply('No Workspace grant', 404);
+          if (b.revision !== grant.revision || b.payloadDigest !== grant.payloadDigest) return reply('Grant mismatch', 409);
+          if (p.endsWith('/decision')) grant.state = b.decision === 'approve' ? 'approved' : 'rejected';
+          if (p.endsWith('/execute')) { grant.state = 'succeeded'; grant.message = 'Fixture Sheet row appended once.'; grant.result = { updatedRange: 'Sales!A2:C2', updatedRows: 1 }; }
+          return reply({ grant });
+        }
+        if (p === '/api/auth/google/contacts/status') return reply({ provider: 'google_contacts', configured: true, connected: f.contactsConnected, email: f.contactsConnected ? 'contacts@example.test' : null, generation: f.contactsConnected ? 'contacts-1' : null, capabilities: f.contactsCapabilities, missingCapabilities: ['contacts_read', 'contacts_write'].filter(item => !f.contactsCapabilities.includes(item)) });
+        if (p === '/api/auth/google/contacts/desktop/connect') return reply({ authorizationUrl: `${url.origin}/api/auth/google/contacts/desktop/authorize?ticket=fixture-contacts-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString(), capabilities: b.capabilities, oauthScopes: b.capabilities.includes('contacts_write') ? ['contacts'] : ['contacts.readonly'] });
+        if (p === '/api/ai-agents/7/google-contacts/grants') return reply({ grants: f.contactsGrants });
+        if (p.includes('/google-contacts/grants/')) {
+          const grant = f.contactsGrants.find(item => p.includes(item.id)); if (!grant) return reply('No Contacts grant', 404);
+          if (b.revision !== grant.revision || b.payloadDigest !== grant.payloadDigest) return reply('Grant mismatch', 409);
+          if (p.endsWith('/decision')) grant.state = b.decision === 'approve' ? 'approved' : 'rejected';
+          if (p.endsWith('/execute')) { grant.state = 'succeeded'; grant.message = grant.tool === 'contacts.google.search' ? 'Fixture search completed.' : 'Fixture Google contact updated once.'; grant.result = grant.tool === 'contacts.google.search' ? { contacts: [{ resourceName: 'people/fixture', name: 'Synthetic Google Contact', email: 'person@example.test' }] } : { resourceName: 'people/fixture', updated: true }; }
+          return reply({ grant });
+        }
+        if (p === '/api/auth/google/calendar/desktop/connect') return reply({ provider: 'google', authorizationUrl: `${url.origin}/api/auth/google/calendar/desktop/authorize?ticket=fixture-calendar-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString(), oauthScopes: ['calendar.readonly'] });
+        if (p === '/api/calendly/oauth/desktop/connect') return reply({ provider: 'calendly', authorizationUrl: `${url.origin}/api/calendly/oauth/desktop/authorize?ticket=fixture-calendly-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString(), oauthScopes: ['default'] });
+        if (p === '/api/ai-agents/7/business/scheduling/status') return reply({ calendly: { connected: f.calendlyConnected, syncEnabled: f.calendlyConnected, accountEmail: f.calendlyConnected ? 'calendly@example.test' : null, desktopConnect: { method: 'POST', path: '/api/calendly/oauth/desktop/connect' } }, google: { connected: f.calendarConnected, syncEnabled: f.calendarConnected, accountEmail: f.calendarConnected ? 'calendar@example.test' : null, desktopConnect: { method: 'POST', path: '/api/auth/google/calendar/desktop/connect' } } });
+        if (p === '/api/ai-agents/7/business/scheduling/event-types') return reply({ eventTypes: [{ uri: 'https://api.calendly.com/event_types/fixture', name: 'Synthetic consultation', duration: 30, active: true }] });
+        if (p === '/api/ai-agents/7/business/scheduling/availability') return reply({ slots: [{ startsAt: '2030-10-20T14:00:00.000Z', endsAt: '2030-10-20T14:30:00.000Z', timezone: url.searchParams.get('timezone') }], timezone: url.searchParams.get('timezone'), source: 'calendly' });
+        if (p === '/api/ai-agents/7/business/scheduling/booking-links') {
+          const item = { ...action(`business-action-${f.businessActions.length + 1}`, `Create one-use booking link for ${b.eventTypeUri}`), kind: 'calendar.booking_link' };
+          f.businessActions.push(item); return reply({ action: item });
+        }
+        if (p === '/api/ai-agents/7/business/contacts' && method === 'GET') return reply({ contacts: [{ id: 42, name: 'Fixture Client', phone: '2694621403', email: 'fixture@example.test', city: 'Kalamazoo', state: 'MI', clientStatus: 'lead', updatedAt: new Date(now).toISOString() }] });
+        if (p === '/api/ai-agents/7/business/contacts/duplicates') return reply({ candidates: [{ key: 'email:fixture@example.test', reasons: ['email'], contacts: [{ id: 42, name: 'Fixture Client', phone: '2694621403', email: 'fixture@example.test', city: 'Kalamazoo', state: 'MI', clientStatus: 'lead', updatedAt: new Date(now).toISOString() }, { id: 43, name: 'Fixture Client Copy', phone: null, email: 'fixture@example.test', city: null, state: null, clientStatus: 'lead', updatedAt: new Date(now).toISOString() }] }] });
+        if (p === '/api/ai-agents/7/business/contacts/actions') {
+          const item = { ...action(`business-action-${f.businessActions.length + 1}`, b.operation === 'create' ? `Create ${b.contact.firstName} ${b.contact.lastName} at ${b.contact.phone}` : `Update contact #${b.contactId}: ${JSON.stringify(b.patch)}`), kind: b.operation === 'create' ? 'contact.create' : 'contact.update' };
+          f.businessActions.push(item); return reply({ action: item });
+        }
+        if (p === '/api/ai-agents/7/business/reports/sales') return reply({ report: { source: 'crokodial_crm', scope: 'tenant', start: url.searchParams.get('start'), end: url.searchParams.get('end'), newClientRecords: 7, distinctClientContacts: 6, activeClientRecords: 18, appointments: { total: 5, scheduled: 1, confirmed: 1, completed: 2, noShow: 1, cancelled: 0 }, daily: [{ date: '2030-10-01', clientRecords: 2 }], averageClientRecordsPerActiveDay: 2, longestDailyStreak: 3, premiumAvailable: false, observedAt: now } });
+        if (/^\/api\/ai-agents\/7\/actions\/[^/]+\/decision$/.test(p)) {
+          const item = f.businessActions.find(candidate => p.includes(candidate.id)); if (!item) return reply('No business action', 404);
+          item.state = b.decision === 'approve' ? 'succeeded' : 'rejected'; item.result = { message: b.decision === 'approve' ? 'Fixture action completed once.' : 'Fixture action rejected.' }; return reply({ action: item });
+        }
         if (p.endsWith('/intelligence/status')) return reply({ environment: 'sandbox', memoryMode: 'persistent', memoryEnabled: true, planningEnabled: true });
         if (p.endsWith('/conversation/session')) return reply({ sessionId: f.sessionId, conversationKey: f.conversationKey, memoryMode: 'persistent' });
         if (p.includes('/conversation/session/') && method === 'GET') {
@@ -51,7 +98,9 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         if (p.endsWith('/conversation/activity')) return reply({ items: activity() });
         if (p.endsWith('/execution/events')) return reply({ events: [{ sequence: 1, requestId: url.searchParams.get('requestId'), state: 'running', reason: 'Preparing fixture response', channel: 'text', createdAt: now }] });
         if (p.endsWith('/conversation/message')) {
-          const answer = b.message === 'Successful post with unavailable history' ? 'Accepted despite history refresh failure.' : 'Saved native conversation reply.';
+          const answer = b.message === 'Successful post with unavailable history' ? 'Accepted despite history refresh failure.'
+            : b.message === 'Render safe assistant formatting' ? '# Fixture heading\n\n- **Reviewed** result\n- `bounded` tool\n\n| Field | Value |\n| --- | --- |\n| Source | CRM |\n\n<script>window.fixtureInjected=true</script> [unsafe](https://example.test)'
+              : 'Saved native conversation reply.';
           if (!f.messageReceipts.has(b.requestId)) {
             const sequence = f.messages.reduce((highest, message) => Math.max(highest, message.sequence), 0);
             f.messages.push({ id: `${b.requestId}:user`, role: 'user', content: b.message, createdAt: Date.now(), requestId: b.requestId, sequence: sequence + 1 }, { id: `${b.requestId}:assistant`, role: 'assistant', content: answer, createdAt: Date.now() + 1, requestId: b.requestId, sequence: sequence + 2 });
@@ -98,7 +147,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         }
         const backgroundBase = '/api/ai-agents/7/background';
         if (p === backgroundBase && method === 'GET') return reply({ tasks: f.tasks, notifications: [] });
-        if (p === backgroundBase && method === 'POST') { const task = { ...b, id: '44444444-4444-4444-8444-444444444444', agentId: 7, contactId: null, status: 'active', runCount: 0, spentMicros: 0, committedMicros: 0, nextDueAt: b.trigger.at, latestRun: null, createdAt: now, updatedAt: Date.now() }; f.tasks.push(task); return reply({ task }); }
+        if (p === backgroundBase && method === 'POST') { const task = { ...b, id: `44444444-4444-4444-8444-${String(f.tasks.length + 1).padStart(12, '0')}`, agentId: 7, contactId: null, status: 'active', runCount: 0, spentMicros: 0, committedMicros: 0, nextDueAt: b.trigger.kind === 'once' ? b.trigger.at : now + 60000, latestRun: null, createdAt: now + f.tasks.length, updatedAt: Date.now() }; f.tasks.push(task); return reply({ task }); }
         if (p.startsWith(`${backgroundBase}/`)) { const task = f.tasks.find(x => p.includes(x.id)); if (!task) return reply('No fixture task', 404); task.status = ({ pause: 'paused', resume: 'active', cancel: 'canceled' })[p.split('/').pop()] || task.status; return reply({ task, runs: [] }); }
         if (p.endsWith('/tools') && method === 'GET') return reply({ capabilities: [{ id: 'calendar.google.read', name: 'Calendar', available: true, reason: 'Fixture connected calendar' }, { id: 'crm.notes.append', name: 'Contact notes', available: true, reason: 'Approval required' }], grants: f.grants });
         if (p.endsWith('/tools/requests')) { const grant = { id: '55555555-5555-4555-8555-555555555555', agentId: 7, tool: b.tool, revision: 1, payloadDigest: hash, args: b.args, destination: 'Fixture calendar', state: 'pending', expiresAt: now + 3600000, createdAt: now, message: null, result: null }; f.grants.push(grant); return reply({ kind: 'grant', grant }); }
@@ -125,6 +174,62 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     const shortcut = name => page.getByRole('button', { name, exact: true });
     const back = async () => { await shortcut('Back to conversation').click(); };
     const work = name => page.getByRole('region', { name, exact: true });
+    console.log('Native fixture: Google Workspace connection and exact Sheet write');
+    let workspaceCard = page.getByRole('article', { name: 'Google Workspace connection and actions', exact: true });
+    await workspaceCard.getByRole('button', { name: 'Connect Google Workspace', exact: true }).click();
+    await workspaceCard.getByRole('status').filter({ hasText: 'Finish Google consent' }).waitFor();
+    let latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/auth/google/workspace/desktop/authorize');
+    assert.equal(new URL(latestOpened).searchParams.has('token'), false);
+    assert.deepEqual((await app.evaluate(() => global.fixture.requests.filter(request => request.path === '/api/auth/google/workspace/desktop/connect').at(-1).body.capabilities)), ['drive_read', 'sheets_read'], 'The first Workspace consent is read-only');
+    await app.evaluate(() => {
+      global.fixture.workspaceConnected = true; global.fixture.workspaceCapabilities = ['drive_read', 'sheets_read'];
+    });
+    await workspaceCard.getByRole('button', { name: 'Check connection', exact: true }).click();
+    await workspaceCard.getByRole('button', { name: 'Enable reviewed Sheet writes', exact: true }).click();
+    await workspaceCard.getByRole('status').filter({ hasText: 'Finish Google consent' }).waitFor();
+    latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/auth/google/workspace/desktop/authorize');
+    assert.deepEqual((await app.evaluate(() => global.fixture.requests.filter(request => request.path === '/api/auth/google/workspace/desktop/connect').at(-1).body.capabilities)), ['drive_read', 'sheets_read', 'sheets_write'], 'Sheet write access requires a separate explicit upgrade');
+    await app.evaluate(() => {
+      global.fixture.workspaceCapabilities = ['drive_read', 'sheets_read', 'sheets_write'];
+      global.fixture.workspaceGrants.push({ id: '77777777-7777-4777-8777-777777777777', tool: 'sheets.google.append', revision: 1, payloadDigest: 'a'.repeat(64), destination: 'Sales!A:C', args: { spreadsheetId: 'fixture-sheet', range: 'Sales!A:C', values: [['Synthetic', 'Reviewed', 1]] }, state: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 3600000, result: null, message: null });
+    });
+    await workspaceCard.getByRole('button', { name: 'Check connection', exact: true }).click();
+    const workspaceReview = page.getByRole('region', { name: 'Google Workspace action review', exact: true });
+    await workspaceReview.getByRole('button', { name: 'Approve exact Sheet write', exact: true }).click();
+    await workspaceReview.getByRole('button', { name: 'Execute approved write once', exact: true }).click();
+    assert.equal(await app.evaluate(() => global.fixture.workspaceGrants[0].state), 'succeeded');
+    const workspaceWrites = await app.evaluate(() => global.fixture.requests.filter(request => request.path.includes('/google-workspace/grants/77777777-7777-4777-8777-777777777777/')));
+    assert.deepEqual(workspaceWrites.map(request => request.path.split('/').at(-1)), ['decision', 'execute']);
+    console.log('Native fixture: Google Contacts least-scope connection, automatic read and exact write');
+    let contactsCard = page.getByRole('article', { name: 'Google Contacts connection and actions', exact: true });
+    await contactsCard.getByRole('button', { name: 'Connect Google Contacts', exact: true }).click();
+    await contactsCard.getByRole('status').filter({ hasText: 'Finish Google consent' }).waitFor();
+    latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/auth/google/contacts/desktop/authorize');
+    assert.equal(new URL(latestOpened).searchParams.has('token'), false);
+    await app.evaluate(() => {
+      global.fixture.contactsConnected = true; global.fixture.contactsCapabilities = ['contacts_read'];
+      global.fixture.contactsGrants.push({ id: '88888888-8888-4888-8888-888888888881', tool: 'contacts.google.search', revision: 1, payloadDigest: 'a'.repeat(64), destination: 'Google Contacts', args: { query: 'Synthetic' }, state: 'approved', createdAt: Date.now(), expiresAt: Date.now() + 3600000, result: null, message: null });
+    });
+    await contactsCard.getByRole('button', { name: 'Check connection', exact: true }).click();
+    await contactsCard.getByRole('button', { name: 'Enable reviewed contact changes', exact: true }).waitFor();
+    await page.waitForTimeout(100);
+    assert.equal(await app.evaluate(() => global.fixture.contactsGrants[0].state), 'succeeded', 'Consent-approved Contacts reads execute without a separate write approval');
+    await contactsCard.getByRole('button', { name: 'Enable reviewed contact changes', exact: true }).click();
+    await contactsCard.getByRole('status').filter({ hasText: 'Finish Google consent' }).waitFor();
+    latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/auth/google/contacts/desktop/authorize');
+    await app.evaluate(() => {
+      global.fixture.contactsCapabilities = ['contacts_read', 'contacts_write'];
+      global.fixture.contactsGrants.push({ id: '88888888-8888-4888-8888-888888888882', tool: 'contacts.google.update', revision: 1, payloadDigest: 'a'.repeat(64), destination: 'people/fixture', args: { resourceName: 'people/fixture', patch: { email: 'corrected@example.test' } }, state: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 3600000, result: null, message: null });
+    });
+    await contactsCard.getByRole('button', { name: 'Check connection', exact: true }).click();
+    const contactsReview = page.getByRole('region', { name: 'Google Contacts action review', exact: true });
+    await contactsReview.getByRole('button', { name: 'Approve exact Google contact change', exact: true }).click();
+    await contactsReview.getByRole('button', { name: 'Execute approved change once', exact: true }).click();
+    assert.equal(await app.evaluate(() => global.fixture.contactsGrants[1].state), 'succeeded');
     console.log('Native fixture: Gmail connection');
     await capture('gmail-connect');
     await shortcut('Email').click();
@@ -132,10 +237,10 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await shortcut('Connect Gmail').click();
     await page.getByText('Finish Google consent in your browser, then return here. Your original request stays saved in this conversation.').waitFor();
     const opened = await app.evaluate(() => global.fixture.opened);
-    assert.equal(opened.length, 1); assert.equal(new URL(opened[0]).pathname, '/api/auth/google/mail/desktop/authorize');
-    assert.equal(new URL(opened[0]).searchParams.has('token'), false);
+    assert.equal(new URL(opened.at(-1)).pathname, '/api/auth/google/mail/desktop/authorize');
+    assert.equal(new URL(opened.at(-1)).searchParams.has('token'), false);
     await app.evaluate(() => { global.fixture.connected = true; global.fixture.historyConnected = true; });
-    await shortcut('Check connection').click();
+    await page.getByRole('article', { name: 'Gmail connection', exact: true }).getByRole('button', { name: 'Check connection', exact: true }).click();
     await page.getByRole('region', { name: 'Email workflow', exact: true }).waitFor();
     console.log('Native fixture: Unsaved editor protection');
     await page.getByLabel('Email text', { exact: true }).fill('Temporary unsaved draft');
@@ -238,6 +343,58 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await page.getByLabel(/^Run at/).fill('2030-10-19T10:00'); await shortcut('Save background task').click();
     await shortcut('Pause future runs').click(); await shortcut('Resume').click(); await shortcut('Cancel task').click();
     assert.equal(await app.evaluate(() => global.fixture.tasks[0].status), 'canceled');
+    await page.getByLabel('Task objective').fill('Monitor the synthetic inbox on a recurring interval');
+    await page.getByLabel('Trigger').selectOption('interval');
+    await page.getByLabel('Repeat every (minutes)').fill('15');
+    await page.getByLabel('Maximum runs').fill('8');
+    await shortcut('Save background task').click();
+    assert.deepEqual(await app.evaluate(() => ({ trigger: global.fixture.tasks[1].trigger, maxRuns: global.fixture.tasks[1].maxRuns, policy: global.fixture.tasks[1].notificationPolicy })), { trigger: { kind: 'interval', everyMinutes: 15 }, maxRuns: 8, policy: 'meaningful' });
+    await page.getByText(/Every 15 minutes/).waitFor();
+    await page.getByText('Monitor the synthetic inbox on a recurring interval', { exact: true }).locator('..').getByRole('button', { name: 'Cancel task', exact: true }).click();
+    assert.equal(await app.evaluate(() => global.fixture.tasks[1].status), 'canceled');
+    console.log('Native fixture: Scheduling connections, booking, CRM contacts and report');
+    await back(); await shortcut('Business').click();
+    const business = work('Scheduling, contacts and reports');
+    await business.getByRole('button', { name: 'Connect Google Calendar', exact: true }).click();
+    await business.getByRole('status').filter({ hasText: 'Finish Google Calendar consent' }).waitFor();
+    latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/auth/google/calendar/desktop/authorize');
+    assert.equal(new URL(latestOpened).searchParams.has('token'), false);
+    await business.getByRole('button', { name: 'Connect Calendly', exact: true }).click();
+    await business.getByRole('status').filter({ hasText: 'Finish Calendly consent' }).waitFor();
+    latestOpened = await app.evaluate(() => global.fixture.opened.at(-1));
+    assert.equal(new URL(latestOpened).pathname, '/api/calendly/oauth/desktop/authorize');
+    assert.equal(new URL(latestOpened).searchParams.has('token'), false);
+    await app.evaluate(() => { global.fixture.calendarConnected = true; global.fixture.calendlyConnected = true; });
+    await business.getByRole('button', { name: 'Check connections', exact: true }).click();
+    await business.getByText(/Calendly: connected as calendly@example.test/).waitFor();
+    await business.getByRole('button', { name: 'Check live availability', exact: true }).click();
+    await business.getByText(/Oct 20, 2030/).waitFor();
+    await business.getByRole('button', { name: 'Prepare one-use booking link', exact: true }).click();
+    let exactAction = business.getByRole('region', { name: 'Exact action review', exact: true });
+    await exactAction.getByRole('button', { name: 'Approve exact action', exact: true }).click();
+    await exactAction.getByRole('status').filter({ hasText: 'Fixture action completed once.' }).waitFor();
+    await business.getByText('Contacts', { exact: true }).click();
+    await business.getByLabel('Search contacts', { exact: true }).fill('Fixture');
+    await business.getByRole('button', { name: 'Search', exact: true }).click();
+    await business.getByRole('button', { name: 'Fixture Client', exact: true }).click();
+    const updateForm = business.locator('form').filter({ hasText: 'Prepare changes to Fixture Client' });
+    await updateForm.getByLabel('Email', { exact: true }).fill('corrected@example.test');
+    await updateForm.getByRole('button', { name: 'Review exact contact update', exact: true }).click();
+    exactAction = business.getByRole('region', { name: 'Exact action review', exact: true });
+    await exactAction.getByRole('button', { name: 'Approve exact action', exact: true }).click();
+    const createForm = business.locator('form').filter({ hasText: 'Create a contact' });
+    await createForm.getByLabel('Phone', { exact: true }).fill('2694621403');
+    await createForm.getByLabel('First name', { exact: true }).fill('Synthetic');
+    await createForm.getByLabel('Last name', { exact: true }).fill('Owner');
+    await createForm.getByRole('button', { name: 'Review exact new contact', exact: true }).click();
+    await business.getByRole('region', { name: 'Exact action review', exact: true }).getByRole('button', { name: 'Approve exact action', exact: true }).click();
+    await business.getByRole('button', { name: 'Review possible duplicates', exact: true }).click();
+    await business.getByText(/email match/).waitFor();
+    await business.getByText('Sales report', { exact: true }).click();
+    await business.getByRole('button', { name: 'Generate report', exact: true }).click();
+    await business.getByText(/7 new client records/).waitFor();
+    assert.deepEqual(await app.evaluate(() => global.fixture.businessActions.map(item => [item.kind, item.state])), [['calendar.booking_link', 'succeeded'], ['contact.update', 'succeeded'], ['contact.create', 'succeeded']]);
     console.log('Native fixture: Approved tools');
     await back(); await shortcut('Assistant capabilities').click();
     await page.getByLabel('Calendar range start').fill('2030-10-19T10:00'); await page.getByLabel('Calendar range end').fill('2030-10-20T10:00');
@@ -245,15 +402,29 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await page.getByText(/Synthetic appointment/).waitFor();
     await page.getByText('Compute and measured model evidence', { exact: true }).click(); await page.getByText(/Hybrid execution is disabled/).waitFor();
     await shortcut('Assistant capabilities').click();
+    console.log('Native fixture: Safe rich assistant formatting');
+    await page.getByLabel('Message your assistant').fill('Render safe assistant formatting'); await shortcut('Send message').click();
+    const markdownTurn = page.getByRole('article').filter({ hasText: 'Fixture heading' });
+    await markdownTurn.getByRole('heading', { name: 'Fixture heading', exact: true }).waitFor();
+    assert.equal(await markdownTurn.locator('strong').filter({ hasText: 'Reviewed' }).count(), 1);
+    assert.equal(await markdownTurn.locator('code').filter({ hasText: 'bounded' }).count(), 1);
+    assert.equal(await markdownTurn.getByRole('table').count(), 1);
+    assert.equal(await markdownTurn.getByRole('link').count(), 0, 'Assistant text cannot create arbitrary clickable links');
+    assert.equal(await page.evaluate(() => window.fixtureInjected), undefined, 'Assistant HTML is rendered as text, never executed');
+    await markdownTurn.getByText(/<script>window\.fixtureInjected=true<\/script>/).waitFor();
     console.log('Native fixture: Persistence and uncertain retry');
+    await page.getByLabel('Message your assistant').fill('Search WhatsApp for persisted-fixture-term'); await shortcut('Send message').click();
+    await page.getByRole('article', { name: 'Local WhatsApp read-only request for saved message', exact: true }).waitFor();
     await app.evaluate(() => { global.fixture.failNextMessage = true; });
     await page.getByLabel('Message your assistant').fill('Persist this native conversation across restart'); await shortcut('Send message').click();
     await page.getByRole('alert').filter({ hasText: 'Synthetic uncertain transport outcome' }).waitFor();
     await shortcut('Send message').click();
     await page.getByRole('alert').filter({ hasText: 'Synthetic uncertain transport outcome' }).waitFor({ state: 'hidden' });
-    const receipts = await app.evaluate(() => global.fixture.requests.filter(x => x.path.endsWith('/conversation/message')));
+    const receipts = await app.evaluate(() => global.fixture.requests.filter(x => x.path.endsWith('/conversation/message') && x.body.message === 'Persist this native conversation across restart'));
     assert.equal(receipts.length, 2); assert.equal(receipts[0].body.requestId, receipts[1].body.requestId);
-    assert.equal(await page.getByText('Saved native conversation reply.', { exact: true }).count(), 1);
+    const persistedRequestId = receipts[0].body.requestId;
+    assert.equal(await app.evaluate((_electron, requestId) => global.fixture.messages.filter(message => message.requestId === requestId && message.role === 'assistant').length, persistedRequestId), 1, 'An uncertain retry must create one server-owned assistant reply for its stable request id');
+    await page.getByText('Saved native conversation reply.', { exact: true }).last().waitFor();
     await app.evaluate(() => { global.fixture.failHistory = true; });
     await page.getByLabel('Message your assistant').fill('Successful post with unavailable history'); await shortcut('Send message').click();
     await page.getByText('Accepted despite history refresh failure.', { exact: true }).waitFor();
@@ -265,8 +436,9 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     assert.equal(await page.getByText('Accepted despite history refresh failure.', { exact: true }).count(), 1, 'Local accepted turn and server transcript merge once');
     assert.equal(await app.evaluate(() => global.fixture.requests.filter(x => x.path.endsWith('/conversation/message')).length), acceptedPosts, 'History recovery must never resubmit a POST');
     await page.reload(); await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
-    await page.getByText('Saved native conversation reply.', { exact: true }).waitFor();
+    await page.getByText('Saved native conversation reply.', { exact: true }).last().waitFor();
     await page.getByText('Persist this native conversation across restart', { exact: true }).waitFor();
+    await page.getByRole('article', { name: 'Local WhatsApp read-only request for saved message', exact: true }).waitFor();
     const mainConversationEvidence = await app.evaluate(() => ({
       sessionPosts: global.fixture.requests.filter(x => x.path.endsWith('/conversation/session') && x.method === 'POST'),
       messagePosts: global.fixture.requests.filter(x => x.path.endsWith('/conversation/message')),
@@ -290,14 +462,15 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
       await window.evaluate((w, width) => w.setSize(width, Math.round(width * 2.16)), width);
       await page.getByRole('article', { name: 'email activity' }).first().getByRole('button', { name: 'Review email' }).click();
       await page.getByRole('region', { name: 'Email workflow', exact: true }).waitFor();
-      const overflow = await page.locator('.nativework').evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+      const emailReview = page.getByRole('region', { name: 'Email review', exact: true });
+      const overflow = await emailReview.evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
       assert.ok(overflow.scroll <= overflow.client + 1, `${width}px native review must not overflow (${JSON.stringify(overflow)})`);
-      await page.locator('.nativework').scrollIntoViewIfNeeded();
+      await emailReview.scrollIntoViewIfNeeded();
       await capture(`email-${width}`); await back();
     }
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(w => w.isVisible() || w.isFocusable())), false);
     assert.deepEqual(errors, []);
-    console.log('PASS native Personal Assistant: one permanent canonical main chat with durable reload/no reset/DELETE, Gmail Connect handoff/pending editor, saved-contact and direct-recipient exact email review/submission, conditional follow-up approval/pause/resume/cancel, screenshot IPC/conflict review/receipt, artifact sandbox interaction/no native bridge, bounded background task controls, approved calendar read, measured model evidence, uncertain-request dedup, narrow-window layout. All provider/API responses isolated fixtures; no real communications or CRM writes.');
+    console.log('PASS native Personal Assistant: one permanent canonical main chat with durable reload/no reset/DELETE; one-use Gmail, Google Workspace, Google Contacts, Google Calendar and Calendly browser handoffs with no bearer in URLs; exact-reviewed Sheet/contact/booking actions; consent-approved bounded Contacts read; live-availability UI; CRM search/update/create/dedupe and tenant report; once and recurring background tasks; safe Markdown without HTML execution or arbitrary links; exact email/follow-up workflows; screenshot conflict receipt; artifact sandbox; approved calendar read; uncertain-request dedup; and narrow-window layout. All provider/API responses are isolated fixtures; no real communications, provider writes, contacts or CRM records were touched.');
   } catch (error) {
     console.error('Native fixture diagnostics:', await page?.locator('.assistant-workspace').innerText().catch(() => '(unavailable)'), await app.evaluate(() => global.fixture?.requests.slice(-8).map(x => ({path:x.path,method:x.method}))));
     throw error;

@@ -28,7 +28,7 @@ test('the native API exposes no client-generated conversation-key or reset side 
   assert.equal(apiModule.disposeAssistantSession, undefined);
 });
 
-const storage = () => { const values = new Map(); return { getItem: key => values.get(key) ?? null, setItem: (key,value) => values.set(key,value), removeItem: key => values.delete(key) }; };
+const storage = () => { const values = new Map(); return { get length() { return values.size; }, key: index => [...values.keys()][index] ?? null, getItem: key => values.get(key) ?? null, setItem: (key,value) => values.set(key,value), removeItem: key => values.delete(key) }; };
 const authenticate = () => { global.localStorage=storage();global.sessionStorage=storage();localStorage.setItem('crokodial_auth_token','TEST-token');localStorage.setItem('crokodial_auth_user',JSON.stringify({id:11,tenant_id:9}));requests=[]; };
 const reply = (data,status=200,code) => ({status,statusText:'Test',headers:{'Content-Type':'application/json'},body:JSON.stringify(status<400?{data}:{error:{message:data,code}})});
 const settings = {environment:'production',memoryEnabled:false,planningEnabled:false,memoryMode:'conversation'};
@@ -89,7 +89,8 @@ test('session route binding cannot be reused by a different signed-in owner or a
  await assert.rejects(sendAssistantMessage(7,'owned-session','Hello'),/Reopen/);assert.equal(requests.length,count);
 });
 const actionReceipt = (state='submitted') => reply({success:true,message:`TEST action ${state}`,confirmedOutcomes:[{actionId:'00000000-0000-4000-8000-000000000001',state}]});
-const journal = () => JSON.parse(localStorage.getItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production') ?? '[]');
+const journalKey = (conversationKey='main:11:9:production', environment='production') => `crokodial_assistant_conversation:https://fixture.invalid:9:11:unresolved:${environment}:${encodeURIComponent(conversationKey)}`;
+const journal = (conversationKey, environment) => JSON.parse(localStorage.getItem(journalKey(conversationKey, environment)) ?? '[]');
 async function openCurrentSession(id='retry-session',status=settings,api={startAssistantSession}) {
  response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(status):reply({sessionId:id,conversationKey:`main:11:9:${status.environment}`});
  return api.startAssistantSession(7);
@@ -132,13 +133,52 @@ test('the continuous conversation keeps an uncertain request across a replacemen
  session=await openCurrentSession('replacement-execution-session');response=()=>{throw new Error('TEST lost again');};await assert.rejects(sendAssistantMessage(7,session,'Email my test client'));
  assert.equal(requests.at(-1).body.requestId,original);assert.equal(journal().length,1);assert.equal(journal()[0].conversationKey,'main:11:9:production');
 });
-test('owner, tenant, agent and server environment isolate pending request identities',async()=>{
+test('replacement Personal Assistant reuses the prior agent request identity after response loss',async()=>{
+ authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'agent-a-session',conversationKey:'main:11:9:production'});
+ const first=await startAssistantSession(7);response=()=>{throw new Error('TEST accepted but response lost');};
+ await assert.rejects(sendAssistantMessage(7,first,'Send TEST replacement-safe action'));const original=requests.at(-1).body.requestId;
+ response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'agent-b-session',conversationKey:'main:11:9:production'});
+ const replacement=await startAssistantSession(8);response=actionReceipt();await sendAssistantMessage(8,replacement,'Send TEST replacement-safe action');
+ assert.equal(requests.at(-1).body.requestId,original);assert.equal(journal().length,0);
+});
+test('replacement agent migrates a legacy agent-scoped unresolved journal',async()=>{
+ authenticate();const message='Send TEST legacy replacement-safe action',requestId=crypto.randomUUID();
+ const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(message)),messageHash=Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join('');
+ localStorage.setItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',JSON.stringify([{requestId,messageHash,conversationKey:'main:11:9:production',createdAt:1}]));
+ response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'legacy-agent-b-session',conversationKey:'main:11:9:production'});
+ const replacement=await startAssistantSession(8);response=actionReceipt();await sendAssistantMessage(8,replacement,message);
+ assert.equal(requests.at(-1).body.requestId,requestId);assert.equal(localStorage.getItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production'),null);assert.equal(journal().length,0);
+});
+test('replacement migration over capacity preserves source receipts and dispatches no message',async()=>{
+ authenticate();const sourceKey='crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',conversationKey='main:11:9:production';
+ const target=Array.from({length:100},(_,index)=>({requestId:crypto.randomUUID(),messageHash:index.toString(16).padStart(64,'0'),conversationKey,createdAt:index+1}));
+ const source=[{requestId:crypto.randomUUID(),messageHash:'f'.repeat(64),conversationKey,createdAt:101}];
+ localStorage.setItem(journalKey(),JSON.stringify(target));localStorage.setItem(sourceKey,JSON.stringify(source));
+ response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'capacity-agent-b',conversationKey});
+ await assert.rejects(startAssistantSession(8),/Too many assistant requests/);
+ assert.deepEqual(JSON.parse(localStorage.getItem(sourceKey)),source);assert.deepEqual(journal(),target);
+ await assert.rejects(sendAssistantMessage(8,'capacity-agent-b','Send TEST capacity action'),/Reopen/);
+ assert.equal(requests.filter(item=>item.path.endsWith('/conversation/message')).length,0);
+});
+for(const failure of ['quota','verification mismatch'])test(`replacement migration ${failure} preserves source receipts and dispatches no message`,async()=>{
+ authenticate();const sourceKey='crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',conversationKey='main:11:9:production';
+ const source=[{requestId:crypto.randomUUID(),messageHash:'e'.repeat(64),conversationKey,createdAt:1}];localStorage.setItem(sourceKey,JSON.stringify(source));
+ const originalSet=localStorage.setItem.bind(localStorage),targetKey=journalKey(),sessionId=failure==='quota'?'quota-agent-b':'mismatch-agent-b';
+ localStorage.setItem=(key,value)=>{if(key===targetKey){if(failure==='quota')throw new Error('TEST quota');return;}return originalSet(key,value);};
+ response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId,conversationKey});
+ try { await assert.rejects(startAssistantSession(8),/could not preserve this request/); }
+ finally { localStorage.setItem=originalSet; }
+ assert.deepEqual(JSON.parse(localStorage.getItem(sourceKey)),source);assert.equal(localStorage.getItem(targetKey),null);
+ await assert.rejects(sendAssistantMessage(8,sessionId,'Send TEST migration failure action'),/Reopen/);
+ assert.equal(requests.filter(item=>item.path.endsWith('/conversation/message')).length,0);
+});
+test('owner, tenant, environment and server conversation isolate pending identities while replacement agents share them',async()=>{
  authenticate();const ids=[];
  for(const [user,tenant,agent,environment] of [[11,9,7,'production'],[12,9,7,'production'],[11,10,7,'production'],[11,9,8,'production'],[11,9,7,'sandbox']]) {
   localStorage.setItem('crokodial_auth_user',JSON.stringify({id:user,tenant_id:tenant}));response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply({...settings,environment}):reply({sessionId:'same-server-id',conversationKey:`main:${user}:${tenant}:${environment}`});
   await startAssistantSession(agent);response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(agent,'same-server-id','Send TEST hello'));ids.push(requests.at(-1).body.requestId);
  }
- assert.equal(new Set(ids).size,5);
+ assert.equal(new Set(ids).size,4);assert.equal(ids[3],ids[0]);
  localStorage.setItem('crokodial_auth_user',JSON.stringify({id:11,tenant_id:9}));const session=await openCurrentSession('same-server-id');response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(7,session,'Send TEST hello'));assert.equal(requests.at(-1).body.requestId,ids[0]);
 });
 test('uncertain and malformed outcomes retain UUID; a definitive receipt alone clears it',async()=>{
@@ -159,7 +199,7 @@ for(const status of ['queued','running','unknown'])test(`${status} goal retains 
 });
 test('old uncertain keys never expire into duplicate actions and storage failure blocks only the outgoing message',async()=>{
  authenticate();const session=await openCurrentSession();response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(7,session,'Send TEST old'));const original=requests.at(-1).body.requestId;
- const key='crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',rows=journal();rows[0].createdAt=1;localStorage.setItem(key,JSON.stringify(rows));
+ const key=journalKey(),rows=journal();rows[0].createdAt=1;localStorage.setItem(key,JSON.stringify(rows));
  response=actionReceipt();await sendAssistantMessage(7,session,'Send TEST old');assert.equal(requests.at(-1).body.requestId,original);
  const set=localStorage.setItem;localStorage.setItem=(key,value)=>{if(key.includes(':unresolved:'))throw new Error('TEST quota');set(key,value);};const count=requests.length;
  await assert.rejects(sendAssistantMessage(7,session,'Send TEST new'),/preserve this request/);assert.equal(requests.length,count);
@@ -171,7 +211,7 @@ test('an account change during delivery does not acknowledge or display another 
 });
 test('journal capacity never evicts an uncertain receipt and read-only status stays available',async()=>{
  authenticate();const session=await openCurrentSession();const conversationKey='main:11:9:production',records=Array.from({length:100},(_,index)=>({requestId:crypto.randomUUID(),messageHash:index.toString(16).padStart(64,'0'),conversationKey,createdAt:1}));
- localStorage.setItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',JSON.stringify(records));const count=requests.length;
+ localStorage.setItem(journalKey(),JSON.stringify(records));const count=requests.length;
  await assert.rejects(sendAssistantMessage(7,session,'Send TEST overflow'),/unresolved outcomes/);assert.equal(requests.length,count);assert.deepEqual(journal(),records);
  response=reply(settings);assert.equal((await readAssistantSessionSettings(7)).environment,'production');
 });
@@ -207,6 +247,23 @@ test('connection requests restore from server history only, scoped to the select
  assert.deepEqual((await readAssistantConversation(7,session)).pendingConnections,[{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['send','history','mailbox_read']}}]);
  assert.equal(journal().length,0);
  for(const value of [{...pending,id:'not-a-uuid'},{...pending,state:'send_now'},{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['unknown']}}]){response=reply({sessionId:session,messages:[],pendingConnections:[value],hasMore:false});await assert.rejects(readAssistantConversation(7,session));}
+});
+test('all OAuth connector continuations survive a native restart with one opaque resume route',async()=>{
+ authenticate();const session=await openCurrentSession('connector-restart');
+ const requirements=[
+  {provider:'google_workspace',capabilities:['sheets_write'],resumePolicy:'prepare_only'},
+  {provider:'google_contacts',capabilities:['contacts_read'],resumePolicy:'prepare_only'},
+  {provider:'google_calendar',capabilities:['calendar_access'],resumePolicy:'prepare_only'},
+  {provider:'calendly',capabilities:['scheduling_access'],resumePolicy:'prepare_only'},
+ ];
+ const saved=requirements.map((connectionRequired,index)=>({id:crypto.randomUUID(),originalRequest:`TEST connector ${index}`,connectionRequired,state:index===0?'ready':'waiting_connection',createdAt:123+index}));
+ response=reply({sessionId:session,messages:[],pendingConnections:saved,hasMore:false});
+ const restored=(await readAssistantConversation(7,session)).pendingConnections;
+ assert.deepEqual(restored.map(item=>item.connectionRequired.provider),requirements.map(item=>item.provider));
+ assert.deepEqual(restored[0].connectionRequired.capabilities,['sheets_read','sheets_write']);
+ response=actionReceipt();await resumeAssistantConnection(7,session,restored[0].id);
+ assert.equal(requests.at(-1).path,`/api/ai-agents/7/conversation/session/${session}/connections/${restored[0].id}/resume`);
+ assert.equal(journal().length,0);
 });
 test('explicit connection continuation uses opaque retry metadata and stable UUID after response loss',async()=>{
  authenticate();const session=await openCurrentSession('connection-resume');const id=crypto.randomUUID();const observed=[];

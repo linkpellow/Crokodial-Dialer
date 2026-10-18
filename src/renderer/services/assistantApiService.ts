@@ -89,18 +89,52 @@ function saveUnresolvedRequests(key: string, records: UnresolvedRequest[]): void
     if (localStorage.getItem(key) !== value) throw new Error();
   } catch { throw new Error('The assistant could not preserve this request for safe retries. No new message was sent. Restore local storage before retrying.'); }
 }
+function unresolvedJournalKey(ownerKey: string, environment: AssistantIntelligenceStatus['environment'], conversationKey: string): string {
+  return `${ownerKey}:unresolved:${environment}:${encodeURIComponent(conversationKey)}`;
+}
+function storedKeys(): string[] {
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index++) { const key = localStorage.key(index); if (key) keys.push(key); }
+  return keys;
+}
 function migrateUnresolvedConversation(ownerKey:string,environment:AssistantIntelligenceStatus['environment'],legacy:string|null,canonical:string):void {
-  if(!legacy||legacy===canonical)return;
-  const journalKey=`${ownerKey}:unresolved:${environment}`,records=readUnresolvedRequests(journalKey);
-  if(records.some(item=>item.conversationKey===legacy))saveUnresolvedRequests(journalKey,records.map(item=>item.conversationKey===legacy?{...item,conversationKey:canonical}:item));
+  const targetKey = unresolvedJournalKey(ownerKey, environment, canonical);
+  const oldSuffix = `:unresolved:${environment}`;
+  const sourceKeys = new Set(storedKeys().filter(key => key.startsWith(`${ownerKey}:`) && key.endsWith(oldSuffix)));
+  if (legacy && legacy !== canonical) sourceKeys.add(unresolvedJournalKey(ownerKey, environment, legacy));
+  const target = readUnresolvedRequests(targetKey), migrated: UnresolvedRequest[] = [];
+  const fullyMigratedSources: string[] = [];
+  // Read and stage every source before changing storage. A failed/capacity-
+  // blocked canonical write must leave all prior uncertain identities intact.
+  for (const key of sourceKeys) {
+    if (key === targetKey) continue;
+    const records = readUnresolvedRequests(key), keep: UnresolvedRequest[] = [];
+    for (const record of records) {
+      if (record.conversationKey === canonical || legacy && record.conversationKey === legacy) migrated.push({ ...record, conversationKey: canonical });
+      else keep.push(record);
+    }
+    if (records.length && keep.length === 0) fullyMigratedSources.push(key);
+  }
+  const merged = [...target, ...migrated].sort((left, right) => left.createdAt - right.createdAt);
+  const unique = merged.filter((record, index, all) => all.findIndex(candidate => candidate.requestId === record.requestId
+    || candidate.conversationKey === record.conversationKey && candidate.messageHash === record.messageHash) === index);
+  if (unique.length > MAX_UNRESOLVED_REQUESTS) throw new Error('Too many assistant requests have unresolved outcomes. Review their saved action receipts before continuing.');
+  // Copy and verify the canonical journal before cleanup. If setItem throws or
+  // readback differs, saveUnresolvedRequests fails while every source remains.
+  if (migrated.length) saveUnresolvedRequests(targetKey, unique);
+  // Mixed source journals are retained rather than rewritten; harmless
+  // duplicates are safer than risking unrelated uncertain identities.
+  for (const key of fullyMigratedSources) {
+    try { localStorage.removeItem(key); } catch { /* Canonical copy is verified; retaining the source is safe. */ }
+  }
 }
 async function ownerRequestIdentity(agentId: number, sessionId: string, message: string) {
-  const ownerKey = conversationStorageKey(agentId), binding = ownerConversations.get(`${ownerKey}:${sessionId}`);
+  const routeOwnerKey = conversationStorageKey(agentId), ownerKey = ownerStorageKey(), binding = ownerConversations.get(`${routeOwnerKey}:${sessionId}`);
   if (!binding) throw new Error('Reopen this assistant conversation before continuing.');
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(message));
-  if (conversationStorageKey(agentId) !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
+  if (conversationStorageKey(agentId) !== routeOwnerKey || ownerStorageKey() !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
   const messageHash = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
-  const journalKey = `${ownerKey}:unresolved:${binding.environment}`, records = readUnresolvedRequests(journalKey);
+  const journalKey = unresolvedJournalKey(ownerKey, binding.environment, binding.conversationKey), records = readUnresolvedRequests(journalKey);
   const previous = records.find(item => item.conversationKey === binding.conversationKey && item.messageHash === messageHash);
   if (previous) return { journalKey, ownerKey, record: previous, retry: true };
   // The authoritative server request ledger has no time-based expiry. Never
@@ -118,25 +152,28 @@ function ownerConversation(agentId: number, sessionId: string): OwnerConversatio
   return binding;
 }
 export async function startAssistantSession(agentId: number): Promise<string> {
-  const ownerKey = conversationStorageKey(agentId);
+  const routeOwnerKey = conversationStorageKey(agentId), ownerKey = ownerStorageKey();
   const status = await readAssistantSessionSettings(agentId);
-  if (conversationStorageKey(agentId) !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
+  if (conversationStorageKey(agentId) !== routeOwnerKey || ownerStorageKey() !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
   const legacyConversationKey = legacyAssistantConversationKey(agentId);
   const result = await request<{ sessionId: string; conversationKey: string }>(`/api/ai-agents/${agentId}/conversation/session`, { method: 'POST', body: '{}' });
   if (!result.sessionId) throw new Error('Crokodial did not create a conversation.');
   // Never associate an earlier account's in-flight creation with a new sign-in.
-  if (conversationStorageKey(agentId) !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
+  if (conversationStorageKey(agentId) !== routeOwnerKey || ownerStorageKey() !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
   const conversationKey=result.conversationKey;
   if(typeof conversationKey!=='string'||!conversationKey||conversationKey.length>100)throw new Error('Crokodial did not identify the main conversation.');
   migrateUnresolvedConversation(ownerKey,status.environment,legacyConversationKey,conversationKey);
   clearLegacyAssistantConversationKey(agentId);
-  ownerConversations.set(`${ownerKey}:${result.sessionId}`, { environment: status.environment, conversationKey });
+  ownerConversations.set(`${routeOwnerKey}:${result.sessionId}`, { environment: status.environment, conversationKey });
   return result.sessionId;
 }
-function conversationStorageKey(agentId: number): string {
+function ownerStorageKey(): string {
   const user = getStoredUser();
   if (!user || !Number.isSafeInteger(user.id) || !Number.isSafeInteger(user.tenant_id) || user.id <= 0 || user.tenant_id! <= 0) throw new Error('Sign in to restore this conversation.');
-  return `crokodial_assistant_conversation:${API_BASE}:${user.tenant_id}:${user.id}:${agentId}`;
+  return `crokodial_assistant_conversation:${API_BASE}:${user.tenant_id}:${user.id}`;
+}
+function conversationStorageKey(agentId: number): string {
+  return `${ownerStorageKey()}:${agentId}`;
 }
 /** Read an obsolete client-generated key only to migrate retry receipt metadata. */
 function legacyAssistantConversationKey(agentId: number): string | null {
@@ -149,6 +186,9 @@ function clearLegacyAssistantConversationKey(agentId: number): void { const key 
 export function assistantSessionUsesOwnerContext(agentId: number, sessionId: string): boolean {
   ownerConversation(agentId, sessionId);
   return true;
+}
+export function assistantSessionConversationKey(agentId: number, sessionId: string): string {
+  return ownerConversation(agentId, sessionId).conversationKey;
 }
 /** Restore the server-selected main conversation's transcript. */
 export async function readAssistantConversation(agentId: number, sessionId: string, before?:number): Promise<{ sessionId: string; messages: WorkspaceMessage[]; pendingConnections: AssistantPendingConnection[];hasMore:boolean;nextBefore?:number }> {
@@ -167,7 +207,7 @@ export async function sendAssistantMessage(agentId: number, sessionId: string, m
     method: 'POST', body: JSON.stringify({ sessionId, message, workspacePlanHistory,
       requestId: identity.record.requestId }),
   });
-  if (conversationStorageKey(agentId) !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation to review its original request.');
+  if (ownerStorageKey() !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation to review its original request.');
   if (result?.success !== true || typeof result.message !== 'string' || !result.message.trim()) throw new Error(result?.error || 'The assistant could not produce a response.');
   return acceptOwnerReply(result, identity);
 }
@@ -194,7 +234,7 @@ export async function resumeAssistantConnection(agentId: number, sessionId: stri
   const identity = await ownerRequestIdentity(agentId, sessionId, `resume-connection:${continuationId}`);
   onRequest?.(identity.record.requestId);
   const result = await request<AssistantReply>(`/api/ai-agents/${agentId}/conversation/session/${encodeURIComponent(sessionId)}/connections/${continuationId}/resume`, { method: 'POST', body: JSON.stringify({ requestId: identity.record.requestId }) });
-  if (conversationStorageKey(agentId) !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
+  if (ownerStorageKey() !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
   if (result?.success !== true || typeof result.message !== 'string' || !result.message.trim()) throw new Error(result?.error || 'The saved request could not be resumed.');
   return acceptOwnerReply(result, identity);
 }

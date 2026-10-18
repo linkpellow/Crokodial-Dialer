@@ -7,19 +7,23 @@ import type {
   ConditionalFollowUp, ConditionalFollowUpExclusion, ScreenshotRecord, ScreenshotRecordSummary,
   ScreenshotFields, ScreenshotField, ScreenshotClient, AssistantBackgroundTask, AssistantBackgroundTaskInput,
   AssistantBackgroundNotification, AssistantBackgroundRun, AssistantToolCapability, AssistantToolGrant,
+  GmailTriageReview,
   AssistantPreparedTool, AssistantToolRequest, AiQualificationReport, AiExecutionProgress,
+  GoogleWorkspaceCapability, GoogleWorkspaceConnection, GoogleWorkspaceConnectionStatus, GoogleWorkspaceToolGrant,
+  GoogleContactsCapability, GoogleContactsConnection, GoogleContactsConnectionStatus, GoogleContactsToolGrant,
 } from './assistantWorkspaceTypes';
 
 export * from './assistantWorkspaceTypes';
 
 /** All native workflow calls use the same authenticated, origin-bound transport as the dialer. */
-export function workspaceRequest<T>(agentId: number, path: string, body?: unknown, method?: string): Promise<T> {
+export function workspaceRequest<T>(agentId: number, path: string, body?: unknown, method?: string, signal?: AbortSignal): Promise<T> {
   if (!Number.isSafeInteger(agentId) || agentId <= 0) throw new Error('Choose an existing Personal Assistant.');
   const pathname = path.split('?')[0];
   if (!pathname.startsWith('/') || pathname.startsWith('//') || path.includes('#') || pathname.includes('\\') || pathname.split('/').includes('..') || /%2e|%2f|%5c/i.test(pathname)) throw new Error('Invalid assistant request path.');
   return apiRequest<T>(`/api/ai-agents/${agentId}${path}`, {
     method: method ?? (body === undefined ? 'GET' : 'POST'),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal,
   });
 }
 const id = (value: string) => encodeURIComponent(value);
@@ -46,6 +50,48 @@ export async function beginGmailConnection(requirement: boolean | GmailCapabilit
     !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error('The Gmail connection link is unavailable. Please try again.');
   return { ...value, authorizationUrl: url.href };
 }
+
+export async function getGoogleWorkspaceStatus(): Promise<GoogleWorkspaceConnectionStatus> {
+  const value = await apiRequest<GoogleWorkspaceConnectionStatus>('/api/auth/google/workspace/status');
+  if (!value || value.provider !== 'google_workspace' || typeof value.connected !== 'boolean' || !Array.isArray(value.capabilities)) throw new Error('Could not verify the Google Workspace connection.');
+  return value;
+}
+/** A one-use browser launch ticket keeps the native bearer token out of the OAuth URL. */
+export async function beginGoogleWorkspaceConnection(capabilities: GoogleWorkspaceCapability[]): Promise<GoogleWorkspaceConnection> {
+  const requested = [...new Set(capabilities)];
+  if (!requested.length || requested.some(item => !['drive_read', 'sheets_read', 'sheets_write'].includes(item))) throw new Error('Choose a valid Google Workspace capability.');
+  const value = await apiRequest<GoogleWorkspaceConnection>('/api/auth/google/workspace/desktop/connect', { method: 'POST', body: JSON.stringify({ capabilities: requested }) });
+  const origin = new URL(platformUrl('/')), url = new URL(value.authorizationUrl, origin);
+  if (url.origin !== origin.origin || url.pathname !== '/api/auth/google/workspace/desktop/authorize' || url.username || url.password || url.hash ||
+    !url.searchParams.get('ticket') || [...url.searchParams.keys()].some(key => key !== 'ticket') || url.searchParams.getAll('ticket').length !== 1 ||
+    !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error('The Google Workspace connection link is unavailable. Please try again.');
+  return { ...value, authorizationUrl: url.href };
+}
+export const listGoogleWorkspaceGrants = (agentId: number) => workspaceRequest<{ grants: GoogleWorkspaceToolGrant[] }>(agentId, '/google-workspace/grants');
+export const prepareGoogleWorkspaceRequest = (agentId: number, input: { tool: GoogleWorkspaceToolGrant['tool']; requestId: string; args: Record<string, unknown> }) => workspaceRequest<{ kind: 'grant'; grant: GoogleWorkspaceToolGrant }>(agentId, '/google-workspace/requests', input);
+export const decideGoogleWorkspaceGrant = (agentId: number, grant: GoogleWorkspaceToolGrant, decision: 'approve' | 'reject') => workspaceRequest<{ grant: GoogleWorkspaceToolGrant }>(agentId, `/google-workspace/grants/${id(grant.id)}/decision`, { revision: grant.revision, payloadDigest: grant.payloadDigest, decision });
+export const executeGoogleWorkspaceGrant = (agentId: number, grant: GoogleWorkspaceToolGrant) => workspaceRequest<{ grant: GoogleWorkspaceToolGrant }>(agentId, `/google-workspace/grants/${id(grant.id)}/execute`, { revision: grant.revision, payloadDigest: grant.payloadDigest });
+
+export async function getGoogleContactsStatus(): Promise<GoogleContactsConnectionStatus> {
+  const value = await apiRequest<GoogleContactsConnectionStatus>('/api/auth/google/contacts/status');
+  if (!value || value.provider !== 'google_contacts' || typeof value.connected !== 'boolean' || !Array.isArray(value.capabilities)) throw new Error('Could not verify the Google Contacts connection.');
+  return value;
+}
+/** A one-use browser launch ticket keeps the native bearer token out of the OAuth URL. */
+export async function beginGoogleContactsConnection(capabilities: GoogleContactsCapability[]): Promise<GoogleContactsConnection> {
+  const requested = [...new Set(capabilities)];
+  if (!requested.length || requested.some(item => !['contacts_read', 'contacts_write'].includes(item))) throw new Error('Choose a valid Google Contacts capability.');
+  const value = await apiRequest<GoogleContactsConnection>('/api/auth/google/contacts/desktop/connect', { method: 'POST', body: JSON.stringify({ capabilities: requested }) });
+  const origin = new URL(platformUrl('/')), url = new URL(value.authorizationUrl, origin);
+  if (url.origin !== origin.origin || url.pathname !== '/api/auth/google/contacts/desktop/authorize' || url.username || url.password || url.hash ||
+    !url.searchParams.get('ticket') || [...url.searchParams.keys()].some(key => key !== 'ticket') || url.searchParams.getAll('ticket').length !== 1 ||
+    !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error('The Google Contacts connection link is unavailable. Please try again.');
+  return { ...value, authorizationUrl: url.href };
+}
+export const listGoogleContactsGrants = (agentId: number) => workspaceRequest<{ grants: GoogleContactsToolGrant[] }>(agentId, '/google-contacts/grants');
+export const prepareGoogleContactsRequest = (agentId: number, input: { tool: GoogleContactsToolGrant['tool']; requestId: string; args: Record<string, unknown> }) => workspaceRequest<{ kind: 'grant'; grant: GoogleContactsToolGrant }>(agentId, '/google-contacts/requests', input);
+export const decideGoogleContactsGrant = (agentId: number, grant: GoogleContactsToolGrant, decision: 'approve' | 'reject') => workspaceRequest<{ grant: GoogleContactsToolGrant }>(agentId, `/google-contacts/grants/${id(grant.id)}/decision`, { revision: grant.revision, payloadDigest: grant.payloadDigest, decision });
+export const executeGoogleContactsGrant = (agentId: number, grant: GoogleContactsToolGrant) => workspaceRequest<{ grant: GoogleContactsToolGrant }>(agentId, `/google-contacts/grants/${id(grant.id)}/execute`, { revision: grant.revision, payloadDigest: grant.payloadDigest });
 
 export const listEmailDrafts = (agentId: number) => workspaceRequest<{ drafts: EmailDraftSummary[]; capability: { available: boolean; provider: string | null; reason: string } }>(agentId, '/email-drafts');
 export const readEmailDraft = (agentId: number, draftId: string) => workspaceRequest<EmailDraftDetail>(agentId, `/email-drafts/${id(draftId)}`);
@@ -77,6 +123,10 @@ export const controlBackgroundTask = (agentId: number, taskId: string, operation
 export const resumeBackgroundTask = (agentId: number, taskId: string, input: { requestId: string; message?: string }) => workspaceRequest<{ task: AssistantBackgroundTask; runs: AssistantBackgroundRun[] }>(agentId, `/background/${id(taskId)}/resume`, input);
 export const triggerBackgroundTask = (agentId: number, taskId: string, input: { eventId: string; eventKey: string }) => workspaceRequest<{ task: AssistantBackgroundTask; run: AssistantBackgroundRun | null }>(agentId, `/background/${id(taskId)}/events`, input);
 export const markBackgroundNotificationsRead = (agentId: number, through: number) => workspaceRequest<{ read: true }>(agentId, '/background/notifications/read', { through });
+export const listGmailTriageReviews = (agentId:number) => workspaceRequest<{reviews:GmailTriageReview[]}>(agentId,'/background/gmail-triage');
+export const createGmailTriageReview = (agentId:number,input:{requestId:string;query:string;folder:'all'|'inbox'|'sent';pageSize:number;maxPages:number;maxItems:number;timeBudgetMs:number}) => workspaceRequest<{review:GmailTriageReview}>(agentId,'/background/gmail-triage',input);
+export const controlGmailTriageReview = (agentId:number,reviewId:string,operation:'pause'|'cancel') => workspaceRequest<{review:GmailTriageReview}>(agentId,`/background/gmail-triage/${id(reviewId)}/${operation}`,{});
+export const resumeGmailTriageReview = (agentId:number,reviewId:string,requestId:string) => workspaceRequest<{review:GmailTriageReview}>(agentId,`/background/gmail-triage/${id(reviewId)}/resume`,{requestId});
 
 export const listAssistantTools = (agentId: number) => workspaceRequest<{ capabilities: AssistantToolCapability[]; grants: AssistantToolGrant[] }>(agentId, '/tools');
 export const searchToolContacts = (agentId: number, query: string) => workspaceRequest<{ contacts: Array<{ id: number; name: string }> }>(agentId, `/tools/contacts?query=${id(query)}`);

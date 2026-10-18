@@ -23,7 +23,7 @@ export function NativeToolControls({ agentId, onActivity }: { agentId: number; o
   const available = (id: string) => capabilities.some(tool => tool.id === id && tool.available);
 
   async function request<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    return workspaceRequest<T>(agentId,url,body);
+    return workspaceRequest<T>(agentId,url,body,undefined,signal);
   }
   useEffect(() => {
     const controller = new AbortController(), current = ++generation.current;

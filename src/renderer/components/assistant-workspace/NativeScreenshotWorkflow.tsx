@@ -1,17 +1,20 @@
 import { useNativeWorkState, useNativeDiscardGuard } from './nativeWorkState';
-import { workspaceRequest, uploadScreenshot, getScreenshotImage } from '../../services/assistantWorkspaceApi';
+import { workspaceRequest, uploadScreenshot, getScreenshotImage, prepareGoogleWorkspaceRequest } from '../../services/assistantWorkspaceApi';
 import { useEffect, useRef, useState } from 'react';
 import { SCREENSHOT_FIELDS, SCREENSHOT_FIELD_LABELS, type ScreenshotClient, type ScreenshotField, type ScreenshotFields, type ScreenshotRecord } from '../../services/assistantWorkspaceTypes';
+import { screenshotSheetSource } from '../../services/sheetAppendPreparation';
+import { NativeSheetAppendPreparation } from '../NativeSheetAppendPreparation';
 
 export function NativeScreenshotWorkflow({ agentId, initialRecordId, onActivity }: { agentId: number; initialRecordId?: string; onActivity?: () => void }) {
   const [record, setRecord] = useState<ScreenshotRecord | null>(null), [fields, setFields] = useState<ScreenshotFields>({});
   const [file, setFile] = useState<File | null>(null), [query, setQuery] = useState(''), [clients, setClients] = useState<ScreenshotClient[]>([]), [clientId, setClientId] = useState('');
   const [resolutions, setResolutions] = useState<Partial<Record<ScreenshotField, 'keep' | 'replace'>>>({});
   const [imageUrl, setImageUrl] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [confirmedClient, setConfirmedClient] = useState(false);
+  const [sheetState, setSheetState] = useState({ dirty: false, busy: false });
   const generation = useRef(0), uploadId = useRef(crypto.randomUUID()), activeImage = useRef('');
   const dirty = !record ? file !== null : !record.receipt && (SCREENSHOT_FIELDS.some(field => (fields[field] ?? '') !== (record.fields[field] ?? '')) || clientId !== (record.preview ? String(record.preview.client.id) : '') || Object.keys(resolutions).length > 0 || confirmedClient);
-  useNativeWorkState(dirty, busy);
-  const { guard, notice } = useNativeDiscardGuard(dirty, busy);
+  useNativeWorkState(dirty || sheetState.dirty, busy || sheetState.busy);
+  const { guard, notice } = useNativeDiscardGuard(dirty || sheetState.dirty, busy || sheetState.busy);
   const base = '/screenshot-records';
   async function request<T>(url: string, body?: unknown): Promise<T> {
     return workspaceRequest<T>(agentId,url,body);
@@ -70,6 +73,7 @@ export function NativeScreenshotWorkflow({ agentId, initialRecordId, onActivity 
           <button disabled={busy || !conflictsResolved || !confirmedClient} onClick={() => void operate(async current => { const next = await request<ScreenshotRecord>(`${base}/${record.id}/apply`, { previewDigest: record.preview!.digest, resolutions }); if (current()) { show(next); onActivity?.(); } })}>Apply reviewed CRM update</button>
         </div>}
       </>}
+      <NativeSheetAppendPreparation agentId={agentId} source={screenshotSheetSource(record, fields)} prepareRequest={prepareGoogleWorkspaceRequest} onStateChange={setSheetState} onActivity={onActivity}/>
     </>}
   </section>;
 }

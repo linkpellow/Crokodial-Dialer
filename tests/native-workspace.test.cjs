@@ -48,6 +48,11 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         }
         else if (request.path === '/api/auth/login') { status = 400; data = { error: { message: 'Native client must use the desktop login contract' } }; }
         else if (request.path === '/api/auth/google/mail/status') data = {configured:true,connected:true,historyConnected:true,connectUrl:'/api/auth/google/mail',historyConnectUrl:'/api/auth/google/mail/history'};
+        else if (request.path === '/api/auth/google/workspace/status') data = {provider:'google_workspace',configured:false,connected:false,email:null,generation:null,capabilities:[],missingCapabilities:['drive_read','sheets_read','sheets_write']};
+        else if (request.path === '/api/ai-agents/7/google-workspace/grants') data = {grants:[]};
+        else if (request.path === '/api/auth/google/contacts/status') data = {provider:'google_contacts',configured:false,connected:false,email:null,generation:null,capabilities:[],missingCapabilities:['contacts_read','contacts_write']};
+        else if (request.path === '/api/ai-agents/7/google-contacts/grants') data = {grants:[]};
+        else if (request.path === '/api/ai-agents/7/business/scheduling/status') data = {google:{connected:false,syncEnabled:false,accountEmail:null},calendly:{connected:false,syncEnabled:false,accountEmail:null}};
         else if (request.path.endsWith('/conversation/activity')) data = {items:[]};
         else if (request.path.endsWith('/execution/events')) data = {events:[]};
         else if (request.method === 'GET' && request.path.includes('/conversation/session/')) {
@@ -111,7 +116,10 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await page.getByPlaceholder('Enter number').fill('2125550123');
     await page.evaluate(() => { window.originalCallAudio = document.querySelector('#dialer-workspace audio'); });
     await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
-    await page.getByLabel('Message your assistant').waitFor();
+    await page.getByLabel('Message your assistant').waitFor().catch(async error => {
+      console.error('Native assistant mount diagnostics', await page.locator('body').innerText().catch(() => '(body unavailable)'), errors, (await app.evaluate(() => global.testRequests)).slice(-20).map(request => request.path));
+      throw error;
+    });
     assert.ok((await page.getByLabel('Message your assistant').boundingBox()).height >= 72, 'Assistant composer should provide a larger writing area');
     assert.equal(await page.getByText('Review drafts before sharing. Verify coverage with the cited source.', { exact: true }).count(), 0, 'The review reminder should be removed');
     assert.equal(await page.getByRole('button', { name: 'Context and goals', exact: true }).count(), 0);

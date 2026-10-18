@@ -2,34 +2,71 @@ import type { AssistantGmailStatus } from './assistantWorkspaceTypes';
 
 /** These capabilities are server-issued prerequisites, never inferred authorization. */
 export type GmailCapability = 'send' | 'history' | 'mailbox_read';
-export interface AssistantConnectionRequired {
-  provider: 'gmail';
-  capabilities: GmailCapability[];
-  resumePolicy: 'prepare_only' | 'explicit';
-  requestId?: string;
-  reason?: string;
-}
-const capabilities: GmailCapability[] = ['send', 'history', 'mailbox_read'];
+export type GoogleWorkspaceCapability = 'drive_read' | 'sheets_read' | 'sheets_write';
+export type GoogleContactsCapability = 'contacts_read' | 'contacts_write';
+export type GoogleCalendarCapability = 'calendar_access';
+export type CalendlyCapability = 'scheduling_access';
+type RequirementBase = { resumePolicy: 'prepare_only' | 'explicit'; requestId?: string; reason?: string };
+export type AssistantConnectionRequired =
+  | RequirementBase & { provider: 'gmail'; capabilities: GmailCapability[] }
+  | RequirementBase & { provider: 'google_workspace'; capabilities: GoogleWorkspaceCapability[] }
+  | RequirementBase & { provider: 'google_contacts'; capabilities: GoogleContactsCapability[] }
+  | RequirementBase & { provider: 'google_calendar'; capabilities: GoogleCalendarCapability[] }
+  | RequirementBase & { provider: 'calendly'; capabilities: CalendlyCapability[] };
+export type AssistantConnectionProvider = AssistantConnectionRequired['provider'];
+
+const allowed = {
+  gmail: ['send', 'history', 'mailbox_read'],
+  google_workspace: ['drive_read', 'sheets_read', 'sheets_write'],
+  google_contacts: ['contacts_read', 'contacts_write'],
+  google_calendar: ['calendar_access'],
+  calendly: ['scheduling_access'],
+} as const;
+const providers = Object.keys(allowed) as AssistantConnectionProvider[];
+
 export function normalizeGmailCapabilities(required: readonly GmailCapability[]): GmailCapability[] {
   const values = new Set(required);
   if (values.has('mailbox_read')) values.add('history');
   if (values.has('history')) values.add('send');
-  return capabilities.filter(capability => values.has(capability));
+  return allowed.gmail.filter(capability => values.has(capability));
 }
+export function normalizeGoogleWorkspaceCapabilities(required: readonly GoogleWorkspaceCapability[]): GoogleWorkspaceCapability[] {
+  const values = new Set(required);
+  if (values.has('sheets_write')) values.add('sheets_read');
+  return allowed.google_workspace.filter(capability => values.has(capability));
+}
+export function normalizeGoogleContactsCapabilities(required: readonly GoogleContactsCapability[]): GoogleContactsCapability[] {
+  const values = new Set(required);
+  if (values.has('contacts_write')) values.add('contacts_read');
+  return allowed.google_contacts.filter(capability => values.has(capability));
+}
+
 export function parseConnectionRequired(value: unknown): AssistantConnectionRequired | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object') throw new Error('The assistant returned an invalid connection request.');
-  const item = value as AssistantConnectionRequired;
-  if (item.provider !== 'gmail' || !Array.isArray(item.capabilities) || !item.capabilities.length ||
-    item.capabilities.some(capability => !capabilities.includes(capability)) ||
-    !['prepare_only', 'explicit'].includes(item.resumePolicy) ||
-    item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2000) ||
-    item.requestId !== undefined && (typeof item.requestId !== 'string' || item.requestId.length > 100)) {
+  const item = value as Record<string, unknown>;
+  const provider = item.provider;
+  if (typeof provider !== 'string' || !providers.includes(provider as AssistantConnectionProvider)
+    || !Array.isArray(item.capabilities) || !item.capabilities.length
+    || item.capabilities.some(capability => typeof capability !== 'string' || !(allowed[provider as AssistantConnectionProvider] as readonly string[]).includes(capability))
+    || !['prepare_only', 'explicit'].includes(String(item.resumePolicy))
+    || item.reason !== undefined && (typeof item.reason !== 'string' || item.reason.length > 2000)
+    || item.requestId !== undefined && (typeof item.requestId !== 'string' || item.requestId.length > 100)) {
     throw new Error('The assistant returned an invalid connection request.');
   }
-  return { provider: 'gmail', capabilities: normalizeGmailCapabilities(item.capabilities), resumePolicy: item.resumePolicy,
-    ...(item.requestId ? { requestId: item.requestId } : {}), ...(item.reason ? { reason: item.reason } : {}) };
+  const capabilities = provider === 'gmail' ? normalizeGmailCapabilities(item.capabilities as GmailCapability[])
+    : provider === 'google_workspace' ? normalizeGoogleWorkspaceCapabilities(item.capabilities as GoogleWorkspaceCapability[])
+      : provider === 'google_contacts' ? normalizeGoogleContactsCapabilities(item.capabilities as GoogleContactsCapability[])
+        : [...new Set(item.capabilities as string[])];
+  return { provider, capabilities, resumePolicy: item.resumePolicy,
+    ...(item.requestId ? { requestId: item.requestId } : {}), ...(item.reason ? { reason: item.reason } : {}) } as AssistantConnectionRequired;
 }
+
+export const connectionProviderLabel = (provider: AssistantConnectionProvider): string => ({
+  gmail: 'Gmail', google_workspace: 'Google Workspace', google_contacts: 'Google Contacts',
+  google_calendar: 'Google Calendar', calendly: 'Calendly',
+})[provider];
+
 export function gmailConnectionReady(status: AssistantGmailStatus | null, required: readonly GmailCapability[]): boolean {
   if (!status?.connected) return false;
   return required.every(capability => capability === 'send' || capability === 'history' && status.historyConnected || capability === 'mailbox_read' && status.mailboxReadConnected === true);

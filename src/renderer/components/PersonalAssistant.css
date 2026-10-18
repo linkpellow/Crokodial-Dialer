@@ -11,3 +11,24 @@
 .assistant-work-shortcuts button { border: 1px solid #b8e88828; border-radius: 7px; padding: 5px 8px; color: #c9dfba; font-size: 10px; }
 .assistant-progress { font-size: 10px; color: #bed2b3; margin-bottom: 10px; }
 .assistant-progress p { padding-top: 5px; }
+.assistant-answer > :first-child { margin-top: 0; }
+.assistant-answer > :last-child { margin-bottom: 0; }
+.assistant-answer p { margin: 0 0 8px; white-space: normal; }
+.assistant-answer ul, .assistant-answer ol { margin: 7px 0; padding-left: 19px; }
+.assistant-answer li { margin: 3px 0; }
+.assistant-answer code { border: 1px solid #b8e88824; border-radius: 4px; background: #071a0e80; padding: 1px 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.assistant-answer pre { overflow: auto; border: 1px solid #b8e88828; border-radius: 7px; background: #071a0e; padding: 9px; white-space: pre; }
+.assistant-answer pre code { border: 0; background: transparent; padding: 0; }
+.assistant-answer blockquote { margin: 8px 0; border-left: 2px solid #a9df73; padding-left: 9px; color: #c8d8c1; }
+.assistant-table-wrap { max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.assistant-table-wrap table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.assistant-table-wrap th, .assistant-table-wrap td { border: 1px solid #b8e88825; padding: 5px; text-align: left; vertical-align: top; }
+.assistant-turn, .assistant-work-card { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+.assistant-inline-mac { margin-left: 18px; border-style: dashed; }
+.assistant-inline-mac section { margin-top: 10px; border-top: 1px solid #b8e88824; padding-top: 9px; }
+.assistant-inline-mac ul, .assistant-inline-mac ol { display: grid; gap: 7px; margin: 8px 0 0; padding-left: 19px; }
+.assistant-inline-mac li { line-height: 1.5; }
+.assistant-inline-mac-meta { color: #aebea8; font-size: 9px; line-height: 1.5; }
+.assistant-inline-mac-warning { border-left: 2px solid #e5c56a; padding-left: 7px; color: #f0d98e; }
+.assistant-inline-mac-exact { max-height: 160px; overflow: auto; border: 1px solid #b8e88824; border-radius: 7px; background: #071a0e80; padding: 8px; white-space: pre-wrap !important; }
+.assistant-inline-mac-review { border: 1px solid #b8e88840; border-radius: 8px; background: #b8e8880b; padding: 9px; }

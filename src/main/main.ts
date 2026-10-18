@@ -1,17 +1,27 @@
-import { app, BrowserWindow, ipcMain, screen, shell, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron';
 import { compassRequest, openCompassBrochure, stopCompass } from './compass';
 import path from 'path';
 import fs from 'fs';
 import { allowWorkspaceMicrophone, createRecordingBridge } from './recordingBridge';
 import { createAssistantFiles } from './assistantFiles';
+import { MacConnectorAuthorityError, createDefaultMacConnectorDependencies, createFileMacConnectorWriteStorage, createMacConnectors,
+  type MacNativeWriteClaim, type MacNativeWriteServerReceipt, type MacWriteAuthority, type MacWriteAuthorityRequest } from './macConnectors';
+import { createAuthorizedMacConnectorMonitor, createFileMacMonitorStorage } from './macConnectorMonitor';
 
 // Never reuse or modify the installed Dialer's profile.
 app.setName('Crokodial Workspace');
 app.setPath('userData', process.env.CROKODIAL_USER_DATA_DIR ? path.resolve(process.env.CROKODIAL_USER_DATA_DIR) : path.join(app.getPath('appData'), 'Crokodial Workspace'));
+// The durable Mac-write ledger is process-local while the app is running. A
+// second main process could otherwise load the same pending receipt and claim
+// it independently, so acquire the OS-wide application lock before creating
+// connectors, registering write IPC, or opening a window.
+const primaryInstance = app.requestSingleInstanceLock();
 
 const PLATFORM_ORIGIN: string = JSON.parse(fs.readFileSync(path.join(__dirname, 'platform-config.json'), 'utf8')).origin;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'dialer-window.json');
+const MAC_MONITOR_CONFIG_PATH = path.join(app.getPath('userData'), 'mac-read-monitor.json');
+const MAC_WRITE_RECEIPTS_PATH = path.join(app.getPath('userData'), 'mac-write-receipts.secure');
 
 interface WindowBounds {
   x: number;
@@ -225,6 +235,16 @@ function createWindow(): void {
   });
 }
 
+function focusWorkspaceWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady()) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 interface ApiFetchPayload {
   url: string;
   method?: string;
@@ -236,8 +256,155 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('Untrusted request.');
 }
 
+async function verifyMacWriteAuthority(request: { bearerToken: string; agentId: number; sessionId: string }): Promise<MacWriteAuthority> {
+  const target = new URL(`/api/ai-agents/${request.agentId}/conversation/session/${encodeURIComponent(request.sessionId)}/authority`, PLATFORM_ORIGIN);
+  if (target.origin !== PLATFORM_ORIGIN) throw new MacConnectorAuthorityError('Local-write authority endpoint is invalid.');
+  let response: Response;
+  try {
+    response = await fetch(target, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(10_000), headers: {
+      Accept: 'application/json', Authorization: `Bearer ${request.bearerToken}`,
+      'x-crokodial-contract-version': '2026-02-26.1', 'x-crokodial-desktop-client': 'crokodial-sms-desktop',
+    } });
+  } catch { throw new MacConnectorAuthorityError('Crokodial could not revalidate this local write. Try again while connected.'); }
+  if (!response.ok) {
+    const definitive = [400, 401, 403, 404, 409].includes(response.status);
+    throw new MacConnectorAuthorityError(definitive
+      ? 'The signed-in server authorization or active assistant conversation changed.'
+      : 'Crokodial could not revalidate this local write. Try again while connected.', definitive);
+  }
+  const length = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(length) && length > 16_384) throw new MacConnectorAuthorityError('Crokodial returned invalid local-write authority.');
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > 16_384) {
+          await reader.cancel().catch(() => undefined);
+          throw new MacConnectorAuthorityError('Crokodial returned invalid local-write authority.');
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  const text = Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8');
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { throw new MacConnectorAuthorityError('Crokodial returned invalid local-write authority.'); }
+  const envelope = body as { data?: unknown };
+  return (envelope?.data ?? body) as MacWriteAuthority;
+}
+
+type NativeWriteAuthorityRequest = { bearerToken: string; agentId: number; sessionId: string };
+
+function requireMacAuthorityRequest(value: unknown): MacWriteAuthorityRequest {
+  if (!value || typeof value !== 'object') throw new MacConnectorAuthorityError('Current server authorization is required.', true);
+  const row = value as Record<string, unknown>;
+  if (typeof row.bearerToken !== 'string' || !row.bearerToken || row.bearerToken.length > 8_192 || /\s/.test(row.bearerToken)
+    || !Number.isSafeInteger(row.agentId) || Number(row.agentId) <= 0 || typeof row.sessionId !== 'string'
+    || !row.sessionId || row.sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(row.sessionId)) {
+    throw new MacConnectorAuthorityError('Current server authorization is invalid.', true);
+  }
+  return { bearerToken: row.bearerToken, agentId: Number(row.agentId), sessionId: row.sessionId };
+}
+
+async function nativeWriteServerRequest(request: NativeWriteAuthorityRequest, pathSuffix: string, body: unknown): Promise<MacNativeWriteServerReceipt> {
+  const target = new URL(`/api/ai-agents/${request.agentId}/conversation/session/${encodeURIComponent(request.sessionId)}/native-writes/${pathSuffix}`, PLATFORM_ORIGIN);
+  if (target.origin !== PLATFORM_ORIGIN) throw new MacConnectorAuthorityError('Native-write receipt endpoint is invalid.');
+  let response: Response;
+  try {
+    response = await fetch(target, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000), headers: {
+      Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${request.bearerToken}`,
+      'x-crokodial-contract-version': '2026-02-26.1', 'x-crokodial-desktop-client': 'crokodial-sms-desktop',
+    }, body: JSON.stringify(body) });
+  } catch { throw new MacConnectorAuthorityError('Crokodial could not preserve this native-write receipt. Inspect it before any retry.'); }
+  if (!response.ok) {
+    const definitive = [400, 401, 403, 404, 409].includes(response.status);
+    throw new MacConnectorAuthorityError(definitive
+      ? 'The signed-in server authorization, conversation, or native-write receipt changed.'
+      : 'Crokodial could not preserve this native-write receipt. Inspect it before any retry.', definitive);
+  }
+  const length = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(length) && length > 16_384) throw new MacConnectorAuthorityError('Crokodial returned an invalid native-write receipt.');
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > 16_384) {
+          await reader.cancel().catch(() => undefined);
+          throw new MacConnectorAuthorityError('Crokodial returned an invalid native-write receipt.');
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8')); }
+  catch { throw new MacConnectorAuthorityError('Crokodial returned an invalid native-write receipt.'); }
+  const envelope = parsed as { data?: unknown };
+  return (envelope?.data ?? parsed) as MacNativeWriteServerReceipt;
+}
+
+const macWriteServerAuthority = {
+  verify: verifyMacWriteAuthority,
+  claim: (request: NativeWriteAuthorityRequest, claim: MacNativeWriteClaim) => nativeWriteServerRequest(request, 'claims', claim),
+  assert: (request: NativeWriteAuthorityRequest, reviewId: string, claimToken: string) =>
+    nativeWriteServerRequest(request, `claims/${encodeURIComponent(reviewId)}/assert`, { claimToken }),
+  finalize: (request: NativeWriteAuthorityRequest, reviewId: string, claimToken: string,
+    state: 'succeeded' | 'failed' | 'unknown', message: string) =>
+    nativeWriteServerRequest(request, `claims/${encodeURIComponent(reviewId)}/finalize`, { claimToken, state, message }),
+  reconcile: (request: NativeWriteAuthorityRequest, claim: MacNativeWriteClaim, resolution: 'applied' | 'not_applied') =>
+    nativeWriteServerRequest(request, `claims/${encodeURIComponent(claim.reviewId)}/reconcile`, { ...claim, resolution }),
+};
+
+function startPrimaryInstance(): void {
 const recordingBridge = createRecordingBridge(PLATFORM_ORIGIN);
 const assistantFiles = createAssistantFiles(PLATFORM_ORIGIN);
+const macConnectors = createMacConnectors(
+  createDefaultMacConnectorDependencies({ openExternal: url => shell.openExternal(url), authority: macWriteServerAuthority }),
+  createFileMacConnectorWriteStorage(MAC_WRITE_RECEIPTS_PATH, {
+    encode(plaintext) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure local receipt storage is unavailable. No external write was started.');
+      return JSON.stringify({ version: 1, ciphertext: safeStorage.encryptString(plaintext).toString('base64') });
+    },
+    decode(stored) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure local receipt storage is unavailable. External writes remain disabled.');
+      const envelope = JSON.parse(stored) as { version?: unknown; ciphertext?: unknown };
+      if (envelope.version !== 1 || typeof envelope.ciphertext !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(envelope.ciphertext)) throw new Error('Saved Mac write receipts are invalid.');
+      return safeStorage.decryptString(Buffer.from(envelope.ciphertext, 'base64'));
+    },
+  }),
+);
+const macMonitor = createAuthorizedMacConnectorMonitor({
+  readers: {
+    listMessageThreads: query => macConnectors.listMessageThreads(query),
+    readWhatsAppConversation: jid => macConnectors.readWhatsAppConversation(jid),
+  },
+  storage: createFileMacMonitorStorage(MAC_MONITOR_CONFIG_PATH, {
+    encode(plaintext) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure local monitor storage is unavailable. Monitoring was not started.');
+      return JSON.stringify({ version: 1, ciphertext: safeStorage.encryptString(plaintext).toString('base64') });
+    },
+    decode(stored) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure local monitor storage is unavailable. Saved monitoring remains stopped.');
+      const envelope = JSON.parse(stored) as { version?: unknown; ciphertext?: unknown };
+      if (envelope.version !== 1 || typeof envelope.ciphertext !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(envelope.ciphertext)) throw new Error('Saved local monitor settings are invalid.');
+      return safeStorage.decryptString(Buffer.from(envelope.ciphertext, 'base64'));
+    },
+  }),
+  verify: verifyMacWriteAuthority,
+});
+macMonitor.subscribe(() => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mac-monitor-state-changed');
+});
 ipcMain.handle('assistant-screenshot-upload', (event, payload: unknown) => {
   assertTrustedSender(event);
   return assistantFiles.upload(payload);
@@ -254,6 +421,27 @@ ipcMain.handle('recording-download-audio', (event, payload: unknown) => {
   assertTrustedSender(event);
   return recordingBridge.download(payload);
 });
+ipcMain.handle('mac-connectors-status', event => { assertTrustedSender(event); return macConnectors.status(); });
+ipcMain.handle('mac-connectors-request-access', (event, connector: unknown) => { assertTrustedSender(event); return macConnectors.requestAccess(connector); });
+ipcMain.handle('mac-contacts-search', (event, query: unknown) => { assertTrustedSender(event); return macConnectors.searchContacts(query); });
+ipcMain.handle('mac-contacts-dedupe-preview', event => { assertTrustedSender(event); return macConnectors.previewContactDuplicates(); });
+ipcMain.handle('mac-contacts-prepare-change', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.prepareContactMutation(payload); });
+ipcMain.handle('mac-contacts-execute-change', (event, binding: unknown) => { assertTrustedSender(event); return macConnectors.executeContactMutation(binding); });
+ipcMain.handle('mac-messages-list-threads', (event, query: unknown) => { assertTrustedSender(event); return macConnectors.listMessageThreads(query); });
+ipcMain.handle('mac-messages-read-thread', (event, threadId: unknown) => { assertTrustedSender(event); return macConnectors.readMessageThread(threadId); });
+ipcMain.handle('mac-messages-prepare-send', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.prepareMessageSend(payload); });
+ipcMain.handle('mac-messages-execute-send', (event, binding: unknown) => { assertTrustedSender(event); return macConnectors.executeMessageSend(binding); });
+ipcMain.handle('mac-reviewed-write-restore', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.restoreReviewedWrite(payload); });
+ipcMain.handle('mac-reviewed-write-list', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.listReviewedWrites(payload); });
+ipcMain.handle('mac-reviewed-write-reconcile', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.reconcileReviewedWrite(payload); });
+ipcMain.handle('mac-whatsapp-search', (event, query: unknown) => { assertTrustedSender(event); return macConnectors.searchWhatsApp(query); });
+ipcMain.handle('mac-sms-prepare-draft', (event, payload: unknown) => { assertTrustedSender(event); return macConnectors.prepareSmsDraft(payload); });
+ipcMain.handle('mac-sms-open-draft', (event, binding: unknown) => { assertTrustedSender(event); return macConnectors.openSmsDraft(binding); });
+ipcMain.handle('mac-monitor-state', (event, payload: unknown) => { assertTrustedSender(event); const row = payload as Record<string, unknown>; return macMonitor.state(requireMacAuthorityRequest(row?.authority)); });
+ipcMain.handle('mac-monitor-resume', (event, payload: unknown) => { assertTrustedSender(event); const row = payload as Record<string, unknown>; return macMonitor.resume(requireMacAuthorityRequest(row?.authority)); });
+ipcMain.handle('mac-monitor-start', (event, payload: unknown) => { assertTrustedSender(event); const row = payload as Record<string, unknown>; return macMonitor.start(row?.configuration, requireMacAuthorityRequest(row?.authority)); });
+ipcMain.handle('mac-monitor-stop', (event, payload: unknown) => { assertTrustedSender(event); const row = payload as Record<string, unknown>; return macMonitor.stop(requireMacAuthorityRequest(row?.authority), row?.clearSaved !== false); });
+ipcMain.handle('mac-monitor-refresh', (event, payload: unknown) => { assertTrustedSender(event); const row = payload as Record<string, unknown>; return macMonitor.refresh(requireMacAuthorityRequest(row?.authority)); });
 
 ipcMain.handle('api-fetch', async (event, payload: ApiFetchPayload) => {
   assertTrustedSender(event);
@@ -354,8 +542,8 @@ ipcMain.handle('open-external', async (event, value: unknown) => {
   if (url.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('Use a secure Crokodial address.');
   await shell.openExternal(url.href);
 });
-app.on('before-quit', stopCompass);
-app.whenReady().then(createWindow);
+app.on('before-quit', () => { stopCompass(); macMonitor.shutdown(); });
+app.whenReady().then(() => { createWindow(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -368,3 +556,11 @@ app.on('activate', () => {
     createWindow();
   }
 });
+}
+
+if (!primaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', focusWorkspaceWindow);
+  startPrimaryInstance();
+}

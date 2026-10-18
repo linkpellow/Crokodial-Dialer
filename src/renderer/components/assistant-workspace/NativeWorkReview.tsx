@@ -7,13 +7,17 @@ import { NativeArtifactWorkspace } from './NativeArtifactWorkspace';
 import { NativeBackgroundTasks } from './NativeBackgroundTasks';
 import { NativeToolControls } from './NativeToolControls';
 import { NativeQualification } from './NativeQualification';
+import { NativeBusinessWorkspace } from './NativeBusinessWorkspace';
+import { NativeMacConnectors } from './NativeMacConnectors';
 import { NativeWorkStateProvider, type NativeWorkState } from './nativeWorkState';
 export type { NativeWorkState } from './nativeWorkState';
 import './nativework.css';
 
-export type NativeWorkKind = 'email' | 'followup' | 'screenshot' | 'artifact' | 'background';
+export type NativeWorkKind = 'email' | 'followup' | 'screenshot' | 'artifact' | 'background' | 'business' | 'mac';
 export interface NativeWorkReviewProps {
   agentId: number;
+  sessionId: string;
+  conversationKey: string;
   kind: NativeWorkKind;
   id?: string;
   onActivity?: () => void;
@@ -22,10 +26,12 @@ export interface NativeWorkReviewProps {
 }
 const titles: Record<NativeWorkKind, string> = {
   email: 'Email', followup: 'Follow-ups', screenshot: 'Screenshot review', artifact: 'Artifacts', background: 'Background tasks',
+  business: 'Scheduling, contacts and reports',
+  mac: 'Mac connections',
 };
 
 /** Native editors use the same authenticated owner APIs and exact approval bindings as chat. */
-export function NativeWorkReview({ agentId, kind, id, onActivity, onClose, onStateChange }: NativeWorkReviewProps) {
+export function NativeWorkReview({ agentId, sessionId, conversationKey, kind, id, onActivity, onClose, onStateChange }: NativeWorkReviewProps) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus(); }, [agentId, kind, id]);
   return <section className="nativework" aria-label={`${titles[kind]} review`}>
@@ -39,6 +45,8 @@ export function NativeWorkReview({ agentId, kind, id, onActivity, onClose, onSta
       {kind === 'screenshot' && <NativeScreenshotWorkflow agentId={agentId} initialRecordId={id} onActivity={onActivity}/>}
       {kind === 'artifact' && <NativeArtifactWorkspace agentId={agentId} initialArtifactId={id} onActivity={onActivity}/>}
       {kind === 'background' && <NativeBackgroundTasks agentId={agentId} initialTaskId={id} onActivity={onActivity}/>}
+      {kind === 'business' && <NativeBusinessWorkspace agentId={agentId} onActivity={onActivity}/>}
+      {kind === 'mac' && <NativeMacConnectors agentId={agentId} sessionId={sessionId} conversationKey={conversationKey} onActivity={onActivity}/>}
     </NativeWorkStateProvider>
   </section>;
 }

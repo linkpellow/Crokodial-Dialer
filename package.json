@@ -64,7 +64,9 @@
     },
     "mac": {
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Crokodial Workspace uses your microphone for calls and recordings you start in Notes."
+        "NSMicrophoneUsageDescription": "Crokodial Workspace uses your microphone for calls and recordings you start in Notes.",
+        "NSAppleEventsUsageDescription": "Crokodial Workspace accesses Contacts or an existing Messages conversation only after you request and review that action.",
+        "NSContactsUsageDescription": "Crokodial Workspace accesses contacts only after you explicitly enable the Contacts connection."
       },
       "icon": "public/power-dialer.png",
       "category": "public.app-category.business",

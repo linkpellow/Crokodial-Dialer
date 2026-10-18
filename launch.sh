@@ -1,12 +1,15 @@
 #!/bin/bash
-set -e
-cd '/Users/linkpellow/crokodialer standalone'
-echo "Switching to feature branch..."
-git fetch origin
-git checkout claude/remove-textbox-label-UQWm2
-echo "Pulling latest changes..."
-git pull origin claude/remove-textbox-label-UQWm2
-echo "Building..."
-npm run pack:mac
-echo "Launching..."
-open 'release/mac-arm64/Crokodial Dialer.app'
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mode="${1:---open}"
+
+if [[ $# -gt 1 || ( "$mode" != "--check" && "$mode" != "--open" ) ]]; then
+  echo "Usage: ./launch.sh [--check|--open]" >&2
+  exit 2
+fi
+
+# The shared launcher verifies the product name, bundle identifier, source
+# digest, and compiled archive before it opens the only supported native app.
+# It never fetches, checks out, pulls, builds, or selects a fallback project.
+exec /usr/bin/env node "$script_dir/../CrokodialSMS-1/scripts/workspace-app.mjs" "$mode"

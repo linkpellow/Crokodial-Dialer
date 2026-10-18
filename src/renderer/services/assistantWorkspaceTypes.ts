@@ -3,7 +3,7 @@
  * No platform renderer or runtime dependency is imported into this native application. */
 
 
-export type AssistantActionKind = 'message.sms' | 'message.email' | 'notes.append' | 'preference.update' | 'quote.generate' | 'quote.sms' | 'quote.email' | 'lead.immediate_call' | 'appointment.reschedule' | 'appointment.cancel' | 'appointment.book' | 'appointment.no_show' | 'appointment.exception';
+export type AssistantActionKind = 'message.sms' | 'message.email' | 'notes.append' | 'preference.update' | 'quote.generate' | 'quote.sms' | 'quote.email' | 'lead.immediate_call' | 'appointment.reschedule' | 'appointment.cancel' | 'appointment.book' | 'appointment.no_show' | 'appointment.exception' | 'contact.create' | 'contact.update' | 'calendar.booking_link';
 export type AssistantActionState = 'pending' | 'ready' | 'executing' | 'succeeded' | 'submitted' | 'failed' | 'unknown' | 'rejected' | 'expired';
 export interface AssistantActionRecord {
   id: string;
@@ -14,6 +14,36 @@ export interface AssistantActionRecord {
   result: { message: string; messageId?: number; providerMessageId?:string; quoteOutcome?: { low: number; high: number; message: string } } | null;
   createdAt: number;
   expiresAt: number;
+}
+
+export type GoogleWorkspaceCapability = 'drive_read' | 'sheets_read' | 'sheets_write';
+export interface GoogleWorkspaceConnectionStatus {
+  provider: 'google_workspace'; connected: boolean; configured: boolean; email: string | null; generation: string | null;
+  capabilities: GoogleWorkspaceCapability[]; missingCapabilities: GoogleWorkspaceCapability[];
+}
+export interface GoogleWorkspaceConnection {
+  authorizationUrl: string; expiresAt: string; capabilities: GoogleWorkspaceCapability[]; oauthScopes: string[];
+}
+export type GoogleWorkspaceToolId = 'drive.google.search' | 'drive.google.read' | 'sheets.google.metadata' | 'sheets.google.read' | 'sheets.google.append' | 'sheets.google.update';
+export interface GoogleWorkspaceToolGrant {
+  id: string; tool: GoogleWorkspaceToolId; revision: number; payloadDigest: string; destination: string; args: Record<string, unknown>;
+  state: 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'unknown' | 'expired'; createdAt: number; expiresAt: number;
+  result: Record<string, unknown> | null; message: string | null;
+}
+
+export type GoogleContactsCapability = 'contacts_read' | 'contacts_write';
+export interface GoogleContactsConnectionStatus {
+  provider: 'google_contacts'; connected: boolean; configured: boolean; email: string | null; generation: string | null;
+  capabilities: GoogleContactsCapability[]; missingCapabilities: GoogleContactsCapability[];
+}
+export interface GoogleContactsConnection {
+  authorizationUrl: string; expiresAt: string; capabilities: GoogleContactsCapability[]; oauthScopes: string[];
+}
+export type GoogleContactsToolId = 'contacts.google.search' | 'contacts.google.read' | 'contacts.google.transfer_preview' | 'contacts.google.create' | 'contacts.google.update';
+export interface GoogleContactsToolGrant {
+  id: string; tool: GoogleContactsToolId; revision: number; payloadDigest: string; destination: string; args: Record<string, unknown>;
+  state: 'pending' | 'approved' | 'rejected' | 'executing' | 'succeeded' | 'failed' | 'unknown' | 'expired'; createdAt: number; expiresAt: number;
+  result: Record<string, unknown> | null; message: string | null;
 }
 
 
@@ -141,6 +171,7 @@ export type AssistantPreparedTool = { kind: 'grant'; grant: AssistantToolGrant }
 /** Trigger identity and ownership are established by the authenticated server. */
 export type AssistantBackgroundTrigger =
   | { kind: 'once'; at: number }
+  | { kind: 'interval'; everyMinutes: number }
   | { kind: 'daily'; localTime: string; timeZone: string }
   | { kind: 'event'; eventKey: string };
 export type AssistantBackgroundTaskStatus = 'active' | 'paused' | 'canceled' | 'completed' | 'budget_exhausted';
@@ -196,6 +227,18 @@ export interface AssistantBackgroundNotification {
   message: string;
   createdAt: number;
   readAt: number | null;
+}
+
+export type GmailTriageStatus = 'active' | 'paused' | 'canceled' | 'completed' | 'failed' | 'waiting_connection';
+export interface GmailTriageResult {
+  threadId:string; messageId:string; subject:string; from:string; recipients:{to:string[];cc:string[]}; observedAt:number; labels:string[];
+  sourceId:string; sourceRevision:string; evidenceUrl:string; missed:boolean; unanswered:boolean; followUp:boolean; rationale:string;
+}
+export interface GmailTriageReview {
+  id:string; agentId:number; authorityAgentId:number|null; query:string; folder:'all'|'inbox'|'sent'; pageSize:number; maxPages:number; maxItems:number;
+  timeBudgetMs:number; status:GmailTriageStatus; pagesProcessed:number; itemsScanned:number; uniqueMessages:number; uniqueThreads:number;
+  duplicateMessages:number; duplicateThreads:number; omittedCount:number; elapsedMs:number; hasMore:boolean; completionReason:string|null; errorMessage:string|null;
+  processing:boolean; counts:{missed:number;unanswered:number;follow_up:number;total:number}; results:GmailTriageResult[];resultsTruncated:boolean;createdAt:number;updatedAt:number;
 }
 
 export interface AiQualificationReport {

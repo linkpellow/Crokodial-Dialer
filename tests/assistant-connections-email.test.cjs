@@ -4,7 +4,7 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {buildSync}=require('esbuild');
 const directory=fs.mkdtempSync(path.join(os.tmpdir(),'workspace-connections-email-'));
 for(const name of ['assistantConnections','assistantEmailState'])buildSync({entryPoints:[`src/renderer/services/${name}.ts`],bundle:true,platform:'node',format:'cjs',outfile:path.join(directory,`${name}.cjs`)});
-const {parseConnectionRequired,gmailCapabilityDisclosure,gmailConnectionReady,gmailConnectionLabel,normalizeGmailCapabilities}=require(path.join(directory,'assistantConnections.cjs'));
+const {parseConnectionRequired,connectionProviderLabel,gmailCapabilityDisclosure,gmailConnectionReady,gmailConnectionLabel,normalizeGmailCapabilities,normalizeGoogleWorkspaceCapabilities,normalizeGoogleContactsCapabilities}=require(path.join(directory,'assistantConnections.cjs'));
 const {emailDraftContent,parseOwnerEmailRecipients,exactEmailRevision,validateEmailBatchReview,validateEmailBatchResults}=require(path.join(directory,'assistantEmailState.cjs'));
 after(()=>fs.rmSync(directory,{recursive:true,force:true}));
 test('connection requirements are typed and never guessed from reply wording',()=>{
@@ -12,6 +12,26 @@ test('connection requirements are typed and never guessed from reply wording',()
  assert.deepEqual(parseConnectionRequired(requirement),{...requirement,capabilities:['send','history','mailbox_read']});
  assert.equal(parseConnectionRequired(undefined),null);
  for(const value of ['connect gmail',{...requirement,provider:'unknown'},{...requirement,capabilities:[]},{...requirement,capabilities:['admin']},{...requirement,resumePolicy:'send_automatically'}])assert.throws(()=>parseConnectionRequired(value),/invalid connection/);
+});
+test('every OAuth connector restores a typed least-scope continuation requirement',()=>{
+ const fixtures=[
+  [{provider:'google_workspace',capabilities:['sheets_write'],resumePolicy:'prepare_only',reason:'Sheet review.'},['sheets_read','sheets_write']],
+  [{provider:'google_contacts',capabilities:['contacts_write'],resumePolicy:'prepare_only',reason:'Contact review.'},['contacts_read','contacts_write']],
+  [{provider:'google_calendar',capabilities:['calendar_access'],resumePolicy:'prepare_only'},['calendar_access']],
+  [{provider:'calendly',capabilities:['scheduling_access'],resumePolicy:'prepare_only'},['scheduling_access']],
+ ];
+ for(const [value,capabilities] of fixtures)assert.deepEqual(parseConnectionRequired(value),{...value,capabilities});
+ assert.equal(connectionProviderLabel('google_workspace'),'Google Workspace');
+ assert.equal(connectionProviderLabel('google_contacts'),'Google Contacts');
+ assert.equal(connectionProviderLabel('google_calendar'),'Google Calendar');
+ assert.equal(connectionProviderLabel('calendly'),'Calendly');
+ assert.deepEqual(normalizeGoogleWorkspaceCapabilities(['sheets_write']),['sheets_read','sheets_write']);
+ assert.deepEqual(normalizeGoogleContactsCapabilities(['contacts_write']),['contacts_read','contacts_write']);
+ for(const value of [
+  {provider:'google_workspace',capabilities:['contacts_read'],resumePolicy:'prepare_only'},
+  {provider:'google_calendar',capabilities:['calendar_access','scheduling_access'],resumePolicy:'prepare_only'},
+  {provider:'calendly',capabilities:['calendar_access'],resumePolicy:'prepare_only'},
+ ])assert.throws(()=>parseConnectionRequired(value),/invalid connection/);
 });
 test('status never grants mailbox search from linked-history or cached/send-only permission',()=>{
  const status={configured:true,connected:true,historyConnected:false};
