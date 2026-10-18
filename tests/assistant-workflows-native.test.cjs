@@ -20,7 +20,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
       // No provider network request may escape this fixture process.
       session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => callback({ cancel: true }));
       const now = Date.now(), hash = 'a'.repeat(64);
-      global.fixture = { requests: [], opened: [], connected: false, historyConnected: false, messages: [], drafts: [], followUps: [], artifacts: [], tasks: [], grants: [], screenshots: [], failNextMessage: false, messageReceipts: new Map(), uploads: [], reads: [] };
+      global.fixture = { requests: [], opened: [], connected: false, historyConnected: false, conversationKey: 'main:11:9:sandbox', sessionId: 'fixture-main-session', historyReads: [], messages: [], drafts: [], followUps: [], artifacts: [], tasks: [], grants: [], screenshots: [], failNextMessage: false, messageReceipts: new Map(), uploads: [], reads: [] };
       const f = global.fixture, action = (id, summary) => ({ id, agentId: 7, kind: 'message.email', state: 'pending', summary, result: null, createdAt: now, expiresAt: now + 3600000 });
       const reply = (data, status = 200) => ({ ok: status < 400, status, statusText: 'Isolated fixture', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(status < 400 ? { success: true, data } : { success: false, error: { code: 'FIXTURE', message: data } }) });
       const activity = () => [
@@ -42,14 +42,19 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         if (p === '/api/auth/google/mail/status') return reply({ configured: true, connected: f.connected, historyConnected: f.historyConnected, connectUrl: '/api/auth/google/mail/connect', historyConnectUrl: '/api/auth/google/mail/history/connect' });
         if (p === '/api/auth/google/mail/desktop/connect') return reply({ authorizationUrl: `${url.origin}/api/auth/google/mail/desktop/authorize?ticket=fixture-once-ticket`, expiresAt: new Date(Date.now() + 60000).toISOString() });
         if (p.endsWith('/intelligence/status')) return reply({ environment: 'sandbox', memoryMode: 'persistent', memoryEnabled: true, planningEnabled: true });
-        if (p.endsWith('/conversation/session')) return reply({ sessionId: 'fixture-session', memoryMode: 'persistent' });
-        if (p.includes('/conversation/session/') && method === 'GET') return f.failHistory ? reply('Synthetic history unavailable', 503) : reply({ sessionId: 'fixture-session', messages: f.messages });
+        if (p.endsWith('/conversation/session')) return reply({ sessionId: f.sessionId, conversationKey: f.conversationKey, memoryMode: 'persistent' });
+        if (p.includes('/conversation/session/') && method === 'GET') {
+          const before = Number(url.searchParams.get('before')) || Number.POSITIVE_INFINITY, eligible = f.messages.filter(message => message.sequence < before), messages = eligible.slice(-200);
+          f.historyReads.push({ sessionId: p.split('/').at(-1), before: Number.isFinite(before) ? before : null });
+          return f.failHistory ? reply('Synthetic history unavailable', 503) : reply({ sessionId: f.sessionId, conversationKey: f.conversationKey, messages, hasMore: eligible.length > messages.length, ...(eligible.length > messages.length ? { nextBefore: messages[0].sequence } : {}) });
+        }
         if (p.endsWith('/conversation/activity')) return reply({ items: activity() });
         if (p.endsWith('/execution/events')) return reply({ events: [{ sequence: 1, requestId: url.searchParams.get('requestId'), state: 'running', reason: 'Preparing fixture response', channel: 'text', createdAt: now }] });
         if (p.endsWith('/conversation/message')) {
           const answer = b.message === 'Successful post with unavailable history' ? 'Accepted despite history refresh failure.' : 'Saved native conversation reply.';
           if (!f.messageReceipts.has(b.requestId)) {
-            f.messages.push({ id: `${b.requestId}:user`, role: 'user', content: b.message, createdAt: Date.now(), requestId: b.requestId }, { id: `${b.requestId}:assistant`, role: 'assistant', content: answer, createdAt: Date.now() + 1, requestId: b.requestId });
+            const sequence = f.messages.reduce((highest, message) => Math.max(highest, message.sequence), 0);
+            f.messages.push({ id: `${b.requestId}:user`, role: 'user', content: b.message, createdAt: Date.now(), requestId: b.requestId, sequence: sequence + 1 }, { id: `${b.requestId}:assistant`, role: 'assistant', content: answer, createdAt: Date.now() + 1, requestId: b.requestId, sequence: sequence + 2 });
             f.messageReceipts.set(b.requestId, true);
           }
           await new Promise(resolve => setTimeout(resolve, 150));
@@ -59,10 +64,13 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
         if (p.endsWith('/tools/contacts')) return reply({ contacts: [{ id: 21, name: 'Synthetic Client' }] });
         if (p.endsWith('/email-drafts/threads')) return reply({ threads: [{ threadId: 'linked-fixture-thread' }] });
         const emailBase = '/api/ai-agents/7/email-drafts';
+        if (p === `${emailBase}/templates` && method === 'GET') return reply({ templates: [] });
         if (p === emailBase && method === 'GET') return reply({ drafts: f.drafts, capability: { available: f.connected, reason: f.connected ? 'Gmail is ready' : 'Connect Gmail' } });
         if (p === emailBase && method === 'POST') {
           if (f.delayEmailSave) await new Promise(resolve => setTimeout(resolve, 700));
-          const draft = { ...b.content, id: '11111111-1111-4111-8111-111111111111', email: 'client@example.test', revision: 1, contentHash: hash, status: 'draft', action: null, mailbox: { provider: 'gmail', generation: 'mailbox-1', sender: 'owner@example.test' }, createdAt: now, updatedAt: Date.now(), attachments: b.content.attachments.map(a => ({ ...a, sha256: hash, byteSize: Buffer.from(a.base64, 'base64').length })) };
+          const id = f.drafts.length ? '12121212-1212-4212-8212-121212121212' : '11111111-1111-4111-8111-111111111111', contactId = b.content.contactId ?? null;
+          const to = b.content.to?.map(item => item.email ? { ...item, source: 'owner_provided' } : { email: 'client@example.test', contactId: item.contactId, source: 'contact' }) ?? (contactId ? [{ email: 'client@example.test', contactId, source: 'contact' }] : []);
+          const draft = { ...b.content, id, contactId, email: to[0]?.email ?? 'client@example.test', recipients: { to, cc: [], bcc: [] }, revision: 1, contentHash: hash, status: 'draft', action: null, mailbox: { provider: 'gmail', generation: 'mailbox-1', sender: 'owner@example.test' }, createdAt: now, updatedAt: Date.now(), attachments: b.content.attachments.map(a => ({ ...a, sha256: hash, byteSize: Buffer.from(a.base64, 'base64').length })) };
           f.drafts.push(draft); return reply(draft);
         }
         if (p.startsWith(`${emailBase}/`)) {
@@ -112,6 +120,8 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     assert.equal(await page.getByRole('tab', { name: 'Assistant', exact: true }).getAttribute('aria-selected'), 'true', 'Explicit workspace launch opens the Personal Assistant first');
     await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
     await page.getByRole('button', { name: 'Connect Gmail', exact: true }).waitFor();
+    assert.deepEqual((await app.evaluate(() => global.fixture.requests)).find(request => request.path.endsWith('/conversation/session') && request.method === 'POST').body, {}, 'The native client asks the server for its canonical main conversation');
+    assert.equal(await page.getByRole('button', { name: 'New conversation', exact: true }).count(), 0);
     const shortcut = name => page.getByRole('button', { name, exact: true });
     const back = async () => { await shortcut('Back to conversation').click(); };
     const work = name => page.getByRole('region', { name, exact: true });
@@ -120,7 +130,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await shortcut('Email').click();
     assert.equal(await page.getByRole('region', { name: 'Email workflow' }).count(), 0);
     await shortcut('Connect Gmail').click();
-    await page.getByText('Finish Google consent in your browser, then return here. Your message stays in this conversation.').waitFor();
+    await page.getByText('Finish Google consent in your browser, then return here. Your original request stays saved in this conversation.').waitFor();
     const opened = await app.evaluate(() => global.fixture.opened);
     assert.equal(opened.length, 1); assert.equal(new URL(opened[0]).pathname, '/api/auth/google/mail/desktop/authorize');
     assert.equal(new URL(opened[0]).searchParams.has('token'), false);
@@ -134,8 +144,8 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     const discard = page.getByRole('alertdialog', { name: 'Unsaved workspace changes' });
     await discard.waitFor(); await discard.getByRole('button', { name: 'Keep editing' }).click();
     assert.equal(await page.getByLabel('Email text', { exact: true }).inputValue(), 'Temporary unsaved draft');
-    await shortcut('New conversation').click(); await discard.waitFor(); await discard.getByRole('button', { name: 'Keep editing' }).click();
-    assert.equal(await app.evaluate(() => global.fixture.requests.some(x => x.method === 'DELETE' && x.path.includes('/conversation/'))), false, 'Canceling reset must not delete context');
+    assert.equal(await shortcut('New conversation').count(), 0, 'The permanent main conversation has no reset or new-session control');
+    assert.equal(await app.evaluate(() => global.fixture.requests.some(x => x.method === 'DELETE' && x.path.includes('/conversation/session/'))), false, 'Workspace navigation must not delete the main conversation');
     await shortcut('Assistant capabilities').click(); await shortcut('Assistant capabilities').click();
     assert.equal(await page.getByLabel('Email text', { exact: true }).inputValue(), 'Temporary unsaved draft', 'Settings toggle keeps the editor mounted');
     await shortcut('New email').click();
@@ -146,7 +156,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     await page.getByLabel('Screenshot file').waitFor(); await shortcut('Email').click();
     assert.equal(await page.getByLabel('Email text', { exact: true }).inputValue(), '');
     console.log('Native fixture: Email editor');
-    await page.getByLabel('Find email recipient', { exact: true }).fill('Synthetic');
+    await page.getByLabel('Find saved contact', { exact: true }).fill('Synthetic');
     await shortcut('Find recipient').click();
     await page.getByLabel('Email recipient', { exact: true }).selectOption('21');
     await shortcut('Load linked reply threads').click();
@@ -189,6 +199,16 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     const decisions = await app.evaluate(() => global.fixture.requests.filter(x => x.path.endsWith('/email-drafts/11111111-1111-4111-8111-111111111111/decision')));
     assert.equal(decisions.length, 1); assert.equal(decisions[0].body.expectedRevision, 2); assert.equal(decisions[0].body.contentHash, 'b'.repeat(64));
     assert.equal(await app.evaluate(() => global.fixture.drafts[0].attachments[0].base64), Buffer.from('Synthetic attachment').toString('base64'));
+    console.log('Native fixture: Direct recipient without CRM contact');
+    await shortcut('New email').click();
+    await page.getByLabel('Exact email recipient', { exact: true }).fill('vendor@example.test');
+    await page.getByLabel('Email subject', { exact: true }).fill('Direct vendor request');
+    await page.getByLabel('Email text', { exact: true }).fill('Please review the attached plan requirements.');
+    await shortcut('Save email draft').click(); await shortcut('Review exact email').click(); await shortcut('Approve and submit email').click();
+    await page.getByRole('status').filter({ hasText: 'Submitted to fixture Gmail' }).waitFor();
+    const directCreate = await app.evaluate(() => global.fixture.requests.filter(x => x.path === '/api/ai-agents/7/email-drafts' && x.method === 'POST').at(-1));
+    assert.equal('contactId' in directCreate.body.content, false); assert.deepEqual(directCreate.body.content.to, [{ email: 'vendor@example.test' }]);
+    assert.equal(await app.evaluate(() => global.fixture.drafts.at(-1).contactId), null);
     console.log('Native fixture: Screenshot review');
     await back(); await shortcut('Screenshot').click();
     await page.getByLabel('Screenshot file').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64') });
@@ -246,13 +266,29 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     assert.equal(await app.evaluate(() => global.fixture.requests.filter(x => x.path.endsWith('/conversation/message')).length), acceptedPosts, 'History recovery must never resubmit a POST');
     await page.reload(); await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
     await page.getByText('Saved native conversation reply.', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('article', { name: 'email activity' }).count(), 1);
+    await page.getByText('Persist this native conversation across restart', { exact: true }).waitFor();
+    const mainConversationEvidence = await app.evaluate(() => ({
+      sessionPosts: global.fixture.requests.filter(x => x.path.endsWith('/conversation/session') && x.method === 'POST'),
+      messagePosts: global.fixture.requests.filter(x => x.path.endsWith('/conversation/message')),
+      historyReads: global.fixture.historyReads,
+      deleted: global.fixture.requests.some(x => x.method === 'DELETE' && x.path.includes('/conversation/session/')),
+      sessionId: global.fixture.sessionId,
+      conversationKey: global.fixture.conversationKey,
+    }));
+    assert.equal(mainConversationEvidence.conversationKey, 'main:11:9:sandbox');
+    assert.ok(mainConversationEvidence.sessionPosts.length >= 2, 'Renderer restart reopens the server-owned main conversation');
+    assert.ok(mainConversationEvidence.sessionPosts.every(request => JSON.stringify(request.body) === '{}'), 'No client-generated chat key creates parallel sessions');
+    assert.ok(mainConversationEvidence.messagePosts.every(request => request.body.sessionId === mainConversationEvidence.sessionId));
+    assert.ok(mainConversationEvidence.historyReads.length >= 2 && mainConversationEvidence.historyReads.every(read => read.sessionId === mainConversationEvidence.sessionId), 'Reload restores the same main-chat history');
+    assert.equal(mainConversationEvidence.deleted, false);
+    assert.equal(await page.getByRole('button', { name: 'New conversation', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('article', { name: 'email activity' }).count(), 2);
     assert.equal(await app.evaluate(() => global.fixture.requests.some(x => x.path.includes('/test/'))), false, 'No preview/test assistant route substitutes for owner workflows');
     const window = await app.browserWindow(page);
     fs.mkdirSync('artifacts/native-assistant-workflows', { recursive: true });
     for (const width of [320, 360, 600]) {
       await window.evaluate((w, width) => w.setSize(width, Math.round(width * 2.16)), width);
-      await page.getByRole('article', { name: 'email activity' }).getByRole('button', { name: 'Review email' }).click();
+      await page.getByRole('article', { name: 'email activity' }).first().getByRole('button', { name: 'Review email' }).click();
       await page.getByRole('region', { name: 'Email workflow', exact: true }).waitFor();
       const overflow = await page.locator('.nativework').evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
       assert.ok(overflow.scroll <= overflow.client + 1, `${width}px native review must not overflow (${JSON.stringify(overflow)})`);
@@ -261,7 +297,7 @@ const { hideNativeWindows } = require('./fixtures/hide-native-windows.cjs');
     }
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(w => w.isVisible() || w.isFocusable())), false);
     assert.deepEqual(errors, []);
-    console.log('PASS native Personal Assistant: Gmail Connect handoff/pending editor, exact email revision/attachment submission, conditional follow-up approval/pause/resume/cancel, screenshot IPC/conflict review/receipt, artifact sandbox interaction/no native bridge, bounded background task controls, approved calendar read, measured model evidence, durable conversation reload and uncertain-request dedup, narrow-window layout. All provider/API responses isolated fixtures; no real communications or CRM writes.');
+    console.log('PASS native Personal Assistant: one permanent canonical main chat with durable reload/no reset/DELETE, Gmail Connect handoff/pending editor, saved-contact and direct-recipient exact email review/submission, conditional follow-up approval/pause/resume/cancel, screenshot IPC/conflict review/receipt, artifact sandbox interaction/no native bridge, bounded background task controls, approved calendar read, measured model evidence, uncertain-request dedup, narrow-window layout. All provider/API responses isolated fixtures; no real communications or CRM writes.');
   } catch (error) {
     console.error('Native fixture diagnostics:', await page?.locator('.assistant-workspace').innerText().catch(() => '(unavailable)'), await app.evaluate(() => global.fixture?.requests.slice(-8).map(x => ({path:x.path,method:x.method}))));
     throw error;

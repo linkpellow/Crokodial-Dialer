@@ -31,23 +31,33 @@ export interface AssistantWorkspaceItem {
 }
 export interface AssistantWorkspaceActivity { items: AssistantWorkspaceItem[]; }
 export interface AssistantWorkspaceMessage {
-  id: string; role: 'user' | 'assistant'; content: string; createdAt: number; requestId?: string;
+  sequence: number; id: string; role: 'user' | 'assistant'; content: string; createdAt: number; requestId?: string;
 }
 
-export const EMAIL_ATTACHMENT_MAX_BYTES = 512 * 1024;
-export const EMAIL_ATTACHMENTS_MAX_BYTES = 1024 * 1024;
+export const EMAIL_ATTACHMENT_MAX_COUNT = 10;
+export const EMAIL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+export const EMAIL_ATTACHMENTS_MAX_BYTES = 15 * 1024 * 1024;
+export type EmailRecipientInput = { contactId: number } | { email: string; name?: string } | { supportContact: { planId: string; id: string } };
+export interface EmailResolvedRecipient { email: string; name?: string; source: 'contact' | 'support_contact' | 'owner_provided'; contactId?: number; supportContact?: { planId: string; id: string } }
+export interface EmailRecipients { to: EmailResolvedRecipient[]; cc: EmailResolvedRecipient[]; bcc: EmailResolvedRecipient[] }
 export interface EmailDraftAttachment { name: string; contentType: 'application/pdf' | 'image/png' | 'image/jpeg' | 'text/plain'; base64: string; }
-export interface EmailDraftInput { contactId: number; subject: string; text: string; html: string; attachments: EmailDraftAttachment[]; replyThreadId?: string; artifact?: { id: string; version: number }; }
+export interface EmailTemplateSummary { id: string; title: string; version: number; subject: string; fields: string[]; attachmentNames: string[]; updatedAt: number }
+export interface EmailTemplateDetail extends EmailTemplateSummary { text: string; html: string; attachments: EmailDraftAttachment[] }
+export interface EmailDraftInput { contactId?: number; template?: { id: string; version: number; values?: Record<string, string> }; to?: EmailRecipientInput[]; cc?: EmailRecipientInput[]; bcc?: EmailRecipientInput[]; subject: string; text: string; html: string; attachments: EmailDraftAttachment[]; replyThreadId?: string; replySource?: 'linked_contact' | 'mailbox'; artifact?: { id: string; version: number }; }
 export interface EmailDraftDetail {
-  id: string; contactId: number; email: string; revision: number; contentHash: string; subject: string; text: string; html: string;
+  id: string; contactId: number | null; email: string; recipients?: EmailRecipients; correctionOf?: { id: string; revision: number; contentHash: string }; revision: number; contentHash: string; subject: string; text: string; html: string;
   attachments: Array<EmailDraftAttachment & { sha256: string; byteSize: number }>;
-  replyThreadId?: string; artifact?: { id: string; version: number }; mailbox: { provider: 'gmail'; generation: string; sender: string };
+  replyThreadId?: string; replySource?: 'linked_contact' | 'mailbox'; artifact?: { id: string; version: number }; mailbox: { provider: 'gmail'; generation: string; sender: string };
   status: 'draft' | 'submitting' | 'submitted' | 'unknown' | 'failed'; action: AssistantActionRecord | null; createdAt: number; updatedAt: number;
 }
-export type EmailDraftSummary = Pick<EmailDraftDetail, 'id' | 'contactId' | 'email' | 'revision' | 'contentHash' | 'subject' | 'status' | 'createdAt' | 'updatedAt'> & { action: AssistantActionRecord | null };
+export type EmailDraftSummary = Pick<EmailDraftDetail, 'id' | 'contactId' | 'email' | 'recipients' | 'correctionOf' | 'revision' | 'contentHash' | 'subject' | 'status' | 'createdAt' | 'updatedAt'> & { action: AssistantActionRecord | null };
 /** Scripts, navigation, forms and external resources have no preview grant. */
 export function emailDraftPreview(html: string): string {
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><meta name="referrer" content="no-referrer"><body>${html}</body>`;
+  // A sandboxed srcdoc can still expose clickable links to its embedder. The
+  // review surface is intentionally inert: destinations remain visible as
+  // text in the message, but reviewing can never navigate or open a URL.
+  const inertHtml = html.replace(/\s+href\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; navigate-to 'none'"><meta name="referrer" content="no-referrer"><body>${inertHtml}</body>`;
 }
 
 export type ConditionalFollowUpStatus = 'pending' | 'scheduled' | 'paused' | 'checking' | 'submitting' | 'submitted' | 'suppressed' | 'canceled' | 'unknown';
@@ -210,6 +220,6 @@ export interface AiQualificationReport {
 export type AssistantGoalStatus = 'queued' | 'running' | 'waiting_input' | 'waiting_approval' | 'completed' | 'failed' | 'canceled' | 'budget_exhausted' | 'unknown';
 export type WorkspaceMessage = AssistantWorkspaceMessage;
 export type WorkspaceItem = AssistantWorkspaceItem;
-export interface AssistantGmailStatus { configured: boolean; connected: boolean; historyConnected: boolean; connectUrl: string; historyConnectUrl: string }
-export interface GmailConnection { authorizationUrl: string; expiresAt: string }
+export interface AssistantGmailStatus { configured: boolean; connected: boolean; historyConnected: boolean; mailboxReadConnected?: boolean; mailboxAccountId?: string; mailboxEmail?: string; email?: string | null; connectUrl: string; historyConnectUrl: string }
+export interface GmailConnection { authorizationUrl: string; expiresAt: string; capabilities?: Array<'send' | 'history' | 'mailbox_read'>; oauthScopes?: string[] }
 export interface AiExecutionProgress { sequence: number; requestId: string; turnId: string; state: 'pending' | 'routing' | 'queued' | 'running' | 'fallback' | 'validation' | 'tool' | 'settled' | 'completed' | 'cached' | 'deferred' | 'canceled' | 'failed' | 'unknown'; channel: string; modelId?: string; provider?: string; reason?: string; maximumProviderChargeMicros?: number; actualProviderChargeMicros?: number | null; createdAt: number }

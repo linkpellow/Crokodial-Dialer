@@ -1,3 +1,4 @@
+import { normalizeGmailCapabilities, type GmailCapability } from './assistantConnections';
 import { apiRequest, AssistantApiError, platformUrl } from './assistantApiService';
 import { getAuthHeaders, getStoredUser, logout } from './dialerApiService';
 import type {
@@ -33,8 +34,12 @@ export async function getGmailStatus(): Promise<AssistantGmailStatus> {
   return value;
 }
 /** The browser receives a short-lived, one-use ticket; the native bearer never enters its URL. */
-export async function beginGmailConnection(history = false): Promise<GmailConnection> {
-  const value = await apiRequest<GmailConnection>('/api/auth/google/mail/desktop/connect', { method: 'POST', body: JSON.stringify({ history }) });
+export async function beginGmailConnection(requirement: boolean | GmailCapability[] = false): Promise<GmailConnection> {
+  const requested = Array.isArray(requirement) ? [...new Set(requirement)] : undefined;
+  if (requested && (!requested.length || requested.some(item => !['send', 'history', 'mailbox_read'].includes(item)))) throw new Error('Unknown Gmail connection capability.');
+  const capabilities = requested ? normalizeGmailCapabilities(requested) : undefined;
+  const history = capabilities ? capabilities.includes('history') || capabilities.includes('mailbox_read') : requirement;
+  const value = await apiRequest<GmailConnection>('/api/auth/google/mail/desktop/connect', { method: 'POST', body: JSON.stringify({ history, ...(capabilities ? { capabilities } : {}) }) });
   const origin = new URL(platformUrl('/')), url = new URL(value.authorizationUrl, origin);
   if (url.origin !== origin.origin || url.pathname !== '/api/auth/google/mail/desktop/authorize' || url.username || url.password || url.hash ||
     !url.searchParams.get('ticket') || [...url.searchParams.keys()].some(key => key !== 'ticket') || url.searchParams.getAll('ticket').length !== 1 ||

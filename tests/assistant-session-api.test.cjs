@@ -4,7 +4,8 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { buildSync } = require('esbuild');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-session-api-'));
 buildSync({ entryPoints: ['src/renderer/services/assistantApiService.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(directory, 'api.cjs'), define: { 'import.meta.env.VITE_API_BASE': '"https://fixture.invalid"' } });
-const { readAssistantSessionSettings, assistantConversationKey, assistantSessionUsesOwnerContext, forgetAssistantConversationKey, startAssistantSession, sendAssistantMessage, disposeAssistantSession, readAssistantConversation } = require(path.join(directory, 'api.cjs'));
+const apiModule = require(path.join(directory, 'api.cjs'));
+const { resumeAssistantConnection, cancelAssistantConnection, readAssistantSessionSettings, assistantSessionUsesOwnerContext, startAssistantSession, sendAssistantMessage, readAssistantConversation } = apiModule;
 after(() => fs.rmSync(directory, { recursive: true, force: true }));
 global.localStorage = { getItem: () => 'synthetic-token' };
 let requests = [], response;
@@ -21,24 +22,10 @@ test('environment comes from the server, and missing or malformed status cannot 
     serve(value); await assert.rejects(readAssistantSessionSettings(7), /unavailable/);
   }
 });
-test('conversation keys contain no transcript and respect owner, agent, explicit reset and memory lifetime', () => {
-  const storage = () => { const values = new Map(); return { values, getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) }; };
-  global.localStorage = storage(); global.sessionStorage = storage();
-  localStorage.setItem('crokodial_auth_user', JSON.stringify({ id: 11, tenant_id: 9 }));
-  const persistent = assistantConversationKey(7, true, 'persistent');
-  assert.equal(assistantConversationKey(7, true, 'persistent'), persistent);
-  assert.notEqual(assistantConversationKey(8, true, 'persistent'), persistent);
-  const sessionOnly = assistantConversationKey(7, true, 'session');
-  assert.notEqual(sessionOnly, persistent);
-  global.sessionStorage = storage();
-  assert.notEqual(assistantConversationKey(7, true, 'session'), sessionOnly);
-  assert.equal(assistantConversationKey(7, true, 'persistent'), persistent);
-  forgetAssistantConversationKey(7); assert.equal(assistantConversationKey(7), null);
-  assert.notEqual(assistantConversationKey(7, true, 'persistent'), persistent);
-  assert.equal(assistantConversationKey(7, true, 'none'), null);
-  assert.equal(assistantConversationKey(7), null);
-  localStorage.setItem('crokodial_auth_user', JSON.stringify({ id: 12, tenant_id: 9 }));
-  assert.equal(assistantConversationKey(7), null);
+test('the native API exposes no client-generated conversation-key or reset side channel', () => {
+  assert.equal(apiModule.assistantConversationKey, undefined);
+  assert.equal(apiModule.forgetAssistantConversationKey, undefined);
+  assert.equal(apiModule.disposeAssistantSession, undefined);
 });
 
 const storage = () => { const values = new Map(); return { getItem: key => values.get(key) ?? null, setItem: (key,value) => values.set(key,value), removeItem: key => values.delete(key) }; };
@@ -50,70 +37,61 @@ const unavailable = () => reply('API endpoint not found',404,'NOT_FOUND');
 test('chooses current owner conversation after a read-only capability check and retains its route',async()=>{
  authenticate();response=(url,options)=>{const pathname=new URL(url).pathname;
   if(pathname.endsWith('/intelligence/status'))return reply(settings);
-  if(pathname.endsWith('/conversation/session'))return reply({sessionId:'current-session'});
+  if(pathname.endsWith('/conversation/session'))return reply({sessionId:'current-session',conversationKey:'main:11:9:production'});
   if(options.method==='DELETE')return reply({deleted:true});
   return reply({success:true,message:'Verified current response'});
  };
  const session=await startAssistantSession(7);assert.equal(session,'current-session');
  assert.equal(assistantSessionUsesOwnerContext(7,session),true);
  assert.equal(requests[0].method??'GET','GET');assert.equal(requests[0].path,'/api/ai-agents/7/intelligence/status');
- assert.equal(requests[1].path,'/api/ai-agents/7/conversation/session');assert.match(requests[1].body.conversationKey,/^[a-f0-9-]{36}$/);
+ assert.equal(requests[1].path,'/api/ai-agents/7/conversation/session');assert.deepEqual(requests[1].body,{});
  await sendAssistantMessage(7,session,'Review my meeting');assert.equal(requests[2].path,'/api/ai-agents/7/conversation/message');assert.match(requests[2].body.requestId,/^[a-f0-9-]{36}$/);assert.equal(requests[2].body.audience,undefined);
- await disposeAssistantSession(7,session);assert.equal(requests[3].path,'/api/ai-agents/7/conversation/session/current-session');assert.equal(requests.length,4);
+ assert.equal(requests.length,3);
 });
-test('only exact unavailable capability selects private legacy preview before any POST',async()=>{
- authenticate();response=(url,options)=>{const pathname=new URL(url).pathname;
-  if(pathname.endsWith('/intelligence/status'))return unavailable();
-  if(pathname.endsWith('/test/session'))return reply({sessionId:'legacy-session'});
-  if(options.method==='DELETE')return reply({deleted:true});
-  return reply({success:true,message:'Private preview prepared.',confirmedOutcomes:[{state:'succeeded'}],appointmentBooked:true,proposedActions:[{name:'message.sms',executed:true}]});
- };
- const session=await startAssistantSession(7);assert.equal(requests.length,2);assert.equal(requests[1].path,'/api/ai-agents/7/test/session');assert.deepEqual(requests[1].body,{});
- assert.equal(assistantSessionUsesOwnerContext(7,session),false);
- const answer=await sendAssistantMessage(7,session,'Draft a message',['Known plan']);assert.equal(requests[2].path,'/api/ai-agents/7/test/message');assert.deepEqual(requests[2].body,{sessionId:session,message:'Draft a message',workspacePlanHistory:['Known plan'],audience:'agent'});
- assert.equal(answer.confirmedOutcomes,undefined);assert.equal(answer.appointmentBooked,undefined);assert.equal(answer.proposedActions[0].executed,undefined);
- await disposeAssistantSession(7,session);assert.equal(requests[3].path,'/api/ai-agents/7/test/session/legacy-session');assert.equal(requests.length,4);
+test('a missing owner-conversation capability fails closed without creating a legacy preview session',async()=>{
+ authenticate();response=unavailable();
+ await assert.rejects(startAssistantSession(7),/API endpoint not found/);
+ assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/ai-agents/7/intelligence/status');
+ assert.equal(requests.some(request=>request.path.includes('/test/')),false);
+});
+test('a session without the canonical server conversation identity is never bound',async()=>{
+ authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'orphan-execution-session'});
+ await assert.rejects(startAssistantSession(7),/identify the main conversation/);
+ assert.throws(()=>assistantSessionUsesOwnerContext(7,'orphan-execution-session'),/Reopen/);
 });
 for(const failure of [
  ['permission denied',reply('Access denied',403,'FORBIDDEN')],['invalid session',reply('Unauthorized',401,'UNAUTHORIZED')],
  ['missing agent',reply('AI agent not found',404,'NOT_FOUND')],['missing capability code',reply('API endpoint not found',404)],
- ['generic not found',reply('Not found',404,'NOT_FOUND')],['server unavailable',reply('Temporary outage',503,'UNAVAILABLE')],
+ ['missing capability endpoint',unavailable()],['generic not found',reply('Not found',404,'NOT_FOUND')],['server unavailable',reply('Temporary outage',503,'UNAVAILABLE')],
  ['malformed status',reply({})],['unrecognized memory mode',reply({...settings,memoryMode:'unknown'})],
  ['transport error',()=>{throw new Error('TEST network interrupted');}],
 ])test(`does not downgrade on ${failure[0]}`,async()=>{
  authenticate();response=failure[1];await assert.rejects(startAssistantSession(7));assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/ai-agents/7/intelligence/status');assert.notEqual(requests[0].method,'POST');
 });
-for(const legacy of [false,true])test(`never retries a failed ${legacy?'legacy':'current'} session POST through another route`,async()=>{
- authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?(legacy?unavailable():reply(settings)):unavailable();
+test('never retries a failed canonical session POST through another route',async()=>{
+ authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):unavailable();
  await assert.rejects(startAssistantSession(7),/API endpoint not found/);assert.equal(requests.length,2);assert.equal(requests.filter(item=>item.method==='POST').length,1);
- assert.equal(requests[1].path,`/api/ai-agents/7/${legacy?'test':'conversation'}/session`);
+ assert.equal(requests[1].path,'/api/ai-agents/7/conversation/session');assert.equal(requests.some(item=>item.path.includes('/test/')),false);
 });
-for(const legacy of [false,true])test(`never probes, falls back or retries a failed ${legacy?'legacy':'current'} message POST`,async()=>{
- authenticate();const sessionId=legacy?'legacy-error':'current-error';response=url=>new URL(url).pathname.endsWith('/intelligence/status')?(legacy?unavailable():reply(settings)):reply({sessionId});await startAssistantSession(7);
+test('never probes, falls back or retries a failed canonical message POST',async()=>{
+ authenticate();const sessionId='current-error';response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId,conversationKey:'main:11:9:production'});await startAssistantSession(7);
  response=unavailable();await assert.rejects(sendAssistantMessage(7,sessionId,'Send authorized work'),/API endpoint not found/);
- assert.equal(requests.length,3);assert.equal(requests.filter(item=>item.path.endsWith('/message')).length,1);assert.equal(requests[2].path,`/api/ai-agents/7/${legacy?'test':'conversation'}/message`);
+ assert.equal(requests.length,3);assert.equal(requests.filter(item=>item.path.endsWith('/message')).length,1);assert.equal(requests[2].path,'/api/ai-agents/7/conversation/message');assert.equal(requests.some(item=>item.path.includes('/test/')),false);
 });
 test('an account change during capability discovery stops before POST',async()=>{
  authenticate();response=()=>{localStorage.setItem('crokodial_auth_user',JSON.stringify({id:12,tenant_id:9}));return reply(settings);};await assert.rejects(startAssistantSession(7),/account changed/);assert.equal(requests.length,1);
 });
 test('session route binding cannot be reused by a different signed-in owner or agent',async()=>{
- authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'owned-session'});await startAssistantSession(7);const count=requests.length;
+ authenticate();response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(settings):reply({sessionId:'owned-session',conversationKey:'main:11:9:production'});await startAssistantSession(7);const count=requests.length;
  assert.throws(()=>assistantSessionUsesOwnerContext(8,'owned-session'),/Reopen/);
  await assert.rejects(sendAssistantMessage(8,'owned-session','Hello'),/Reopen/);localStorage.setItem('crokodial_auth_user',JSON.stringify({id:12,tenant_id:9}));
  assert.throws(()=>assistantSessionUsesOwnerContext(7,'owned-session'),/Reopen/);
  await assert.rejects(sendAssistantMessage(7,'owned-session','Hello'),/Reopen/);assert.equal(requests.length,count);
 });
-for(const legacy of [false,true])test(`reset accepts only the exact ${legacy?'legacy':'current'} missing-session error`,async()=>{
- authenticate();const sessionId=legacy?'legacy-reset':'current-reset';response=url=>new URL(url).pathname.endsWith('/intelligence/status')?(legacy?unavailable():reply(settings)):reply({sessionId});await startAssistantSession(7);
- response=reply('AI agent not found',404,'NOT_FOUND');await assert.rejects(disposeAssistantSession(7,sessionId),/AI agent not found/);
- response=reply(legacy?'Test session not found':'Assistant conversation not found',404,'NOT_FOUND');await disposeAssistantSession(7,sessionId);
- await assert.rejects(sendAssistantMessage(7,sessionId,'Hello'),/Reopen/);
-});
-
 const actionReceipt = (state='submitted') => reply({success:true,message:`TEST action ${state}`,confirmedOutcomes:[{actionId:'00000000-0000-4000-8000-000000000001',state}]});
 const journal = () => JSON.parse(localStorage.getItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production') ?? '[]');
 async function openCurrentSession(id='retry-session',status=settings,api={startAssistantSession}) {
- response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(status):reply({sessionId:id});
+ response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply(status):reply({sessionId:id,conversationKey:`main:11:9:${status.environment}`});
  return api.startAssistantSession(7);
 }
 test('response loss then explicit retry uses one immutable request UUID and no automatic resend',async()=>{
@@ -140,17 +118,24 @@ test('app restart and replacement server session preserve the logical conversati
  await restarted.sendAssistantMessage(7,nextSession,'Send him the TEST quote',['Different client plan']);
  assert.equal(requests.at(-1).body.requestId,first);assert.equal(requests.at(-1).body.sessionId,'after-restart');assert.equal(journal().length,0);
 });
-test('explicit new conversation never reuses another context request and preserves the old uncertain metadata',async()=>{
- authenticate();let session=await openCurrentSession('old-client-context');response=()=>{throw new Error('TEST lost');};
- await assert.rejects(sendAssistantMessage(7,session,'Email my test client'));const original=requests.at(-1).body.requestId,oldKey=journal()[0].conversationKey;
- response=reply({deleted:true});await disposeAssistantSession(7,session);forgetAssistantConversationKey(7);
- session=await openCurrentSession('new-client-context');response=()=>{throw new Error('TEST lost again');};await assert.rejects(sendAssistantMessage(7,session,'Email my test client'));
- assert.notEqual(requests.at(-1).body.requestId,original);assert.equal(journal().length,2);assert.equal(journal()[0].conversationKey,oldKey);assert.notEqual(journal()[1].conversationKey,oldKey);
+test('upgrading to the canonical main chat migrates uncertain request receipts from the legacy local key',async()=>{
+ authenticate();const legacy=crypto.randomUUID(),message='Send the TEST upgrade-safe request';
+ const legacyKey='crokodial_assistant_conversation:https://fixture.invalid:9:11:7';localStorage.setItem(legacyKey,legacy);
+ const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(message)),messageHash=Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join(''),requestId=crypto.randomUUID();
+ localStorage.setItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',JSON.stringify([{requestId,messageHash,conversationKey:legacy,createdAt:1}]));
+ const session=await openCurrentSession('canonical-session');assert.equal(journal()[0].conversationKey,'main:11:9:production');assert.equal(localStorage.getItem(legacyKey),null);response=actionReceipt();
+ await sendAssistantMessage(7,session,message);assert.equal(requests.at(-1).body.requestId,requestId);assert.equal(journal().length,0);
+});
+test('the continuous conversation keeps an uncertain request across a replacement execution session',async()=>{
+ authenticate();let session=await openCurrentSession('old-execution-session');response=()=>{throw new Error('TEST lost');};
+ await assert.rejects(sendAssistantMessage(7,session,'Email my test client'));const original=requests.at(-1).body.requestId;
+ session=await openCurrentSession('replacement-execution-session');response=()=>{throw new Error('TEST lost again');};await assert.rejects(sendAssistantMessage(7,session,'Email my test client'));
+ assert.equal(requests.at(-1).body.requestId,original);assert.equal(journal().length,1);assert.equal(journal()[0].conversationKey,'main:11:9:production');
 });
 test('owner, tenant, agent and server environment isolate pending request identities',async()=>{
  authenticate();const ids=[];
  for(const [user,tenant,agent,environment] of [[11,9,7,'production'],[12,9,7,'production'],[11,10,7,'production'],[11,9,8,'production'],[11,9,7,'sandbox']]) {
-  localStorage.setItem('crokodial_auth_user',JSON.stringify({id:user,tenant_id:tenant}));response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply({...settings,environment}):reply({sessionId:'same-server-id'});
+  localStorage.setItem('crokodial_auth_user',JSON.stringify({id:user,tenant_id:tenant}));response=url=>new URL(url).pathname.endsWith('/intelligence/status')?reply({...settings,environment}):reply({sessionId:'same-server-id',conversationKey:`main:${user}:${tenant}:${environment}`});
   await startAssistantSession(agent);response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(agent,'same-server-id','Send TEST hello'));ids.push(requests.at(-1).body.requestId);
  }
  assert.equal(new Set(ids).size,5);
@@ -185,21 +170,21 @@ test('an account change during delivery does not acknowledge or display another 
  await assert.rejects(sendAssistantMessage(7,session,'Send TEST account-bound'),/account changed/);assert.equal(journal().length,1);
 });
 test('journal capacity never evicts an uncertain receipt and read-only status stays available',async()=>{
- authenticate();const session=await openCurrentSession();const conversationKey=assistantConversationKey(7),records=Array.from({length:100},(_,index)=>({requestId:crypto.randomUUID(),messageHash:index.toString(16).padStart(64,'0'),conversationKey,createdAt:1}));
+ authenticate();const session=await openCurrentSession();const conversationKey='main:11:9:production',records=Array.from({length:100},(_,index)=>({requestId:crypto.randomUUID(),messageHash:index.toString(16).padStart(64,'0'),conversationKey,createdAt:1}));
  localStorage.setItem('crokodial_assistant_conversation:https://fixture.invalid:9:11:7:unresolved:production',JSON.stringify(records));const count=requests.length;
  await assert.rejects(sendAssistantMessage(7,session,'Send TEST overflow'),/unresolved outcomes/);assert.equal(requests.length,count);assert.deepEqual(journal(),records);
  response=reply(settings);assert.equal((await readAssistantSessionSettings(7)).environment,'production');
 });
-for(const mode of ['none','session'])test(`${mode} memory stores only retry metadata without restoring a conversation across its boundary`,async()=>{
+for(const mode of ['none','session'])test(`${mode} memory keeps safe retry identity in the canonical continuous conversation`,async()=>{
  authenticate();const firstSession=await openCurrentSession('before-boundary',{...settings,memoryMode:mode});response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(7,firstSession,'TEST sensitive text'));const original=requests.at(-1).body.requestId;
  global.sessionStorage=storage();const nextSession=await openCurrentSession('after-boundary',{...settings,memoryMode:mode});response=()=>{throw new Error('TEST lost');};await assert.rejects(sendAssistantMessage(7,nextSession,'TEST sensitive text'));
- assert.notEqual(requests.at(-1).body.requestId,original);assert.equal(journal().length,2);assert.equal(JSON.stringify(journal()).includes('sensitive'),false);
+ assert.equal(requests.at(-1).body.requestId,original);assert.equal(journal().length,1);assert.equal(journal()[0].conversationKey,'main:11:9:production');assert.equal(JSON.stringify(journal()).includes('sensitive'),false);
 });
 
 test('restores the authoritative owner transcript without changing route on read failure', async () => {
  authenticate(); const session=await openCurrentSession('saved-conversation');
- const messages=[{id:'user-1',role:'user',content:'TEST user',createdAt:123},{id:'assistant-1',role:'assistant',content:'TEST answer',createdAt:124}];
- response=reply({sessionId:session,messages});assert.deepEqual((await readAssistantConversation(7,session)).messages,messages);
+ const messages=[{sequence:1,id:'user-1',role:'user',content:'TEST user',createdAt:123},{sequence:2,id:'assistant-1',role:'assistant',content:'TEST answer',createdAt:124}];
+ response=reply({sessionId:session,messages,hasMore:false});assert.deepEqual((await readAssistantConversation(7,session)).messages,messages);
  assert.equal(requests.at(-1).path,'/api/ai-agents/7/conversation/session/saved-conversation');
  response=reply('Unavailable',503,'UNAVAILABLE');const before=requests.length;
  await assert.rejects(readAssistantConversation(7,session),/Unavailable/);assert.equal(requests.length,before+1);assert.equal(assistantSessionUsesOwnerContext(7,session),true);
@@ -212,4 +197,29 @@ test('progress observation receives the persisted UUID before its message POST a
  await assert.rejects(sendAssistantMessage(7,session,'TEST progress',[],observe));
  await assert.rejects(sendAssistantMessage(7,session,'TEST progress',[],observe));
  assert.equal(observed.length,2);assert.equal(observed[0],observed[1]);assert.equal(requests.at(-1).body.requestId,observed[0]);
+});
+
+
+test('connection requests restore from server history only, scoped to the selected session',async()=>{
+ authenticate();const session=await openCurrentSession('connection-session');const id=crypto.randomUUID();
+ const pending={id,originalRequest:'TEST private original request',connectionRequired:{provider:'gmail',capabilities:['mailbox_read'],resumePolicy:'prepare_only'},state:'waiting_connection',createdAt:123};
+ response=reply({sessionId:session,messages:[],pendingConnections:[pending],hasMore:false});
+ assert.deepEqual((await readAssistantConversation(7,session)).pendingConnections,[{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['send','history','mailbox_read']}}]);
+ assert.equal(journal().length,0);
+ for(const value of [{...pending,id:'not-a-uuid'},{...pending,state:'send_now'},{...pending,connectionRequired:{...pending.connectionRequired,capabilities:['unknown']}}]){response=reply({sessionId:session,messages:[],pendingConnections:[value],hasMore:false});await assert.rejects(readAssistantConversation(7,session));}
+});
+test('explicit connection continuation uses opaque retry metadata and stable UUID after response loss',async()=>{
+ authenticate();const session=await openCurrentSession('connection-resume');const id=crypto.randomUUID();const observed=[];
+ response=()=>{throw new Error('TEST lost resume response');};
+ await assert.rejects(resumeAssistantConnection(7,session,id,requestId=>observed.push(requestId)),/lost resume/);
+ await assert.rejects(resumeAssistantConnection(7,session,id,requestId=>observed.push(requestId)),/lost resume/);
+ assert.equal(observed[0],observed[1]);assert.deepEqual(requests.at(-1).body,{requestId:observed[0]});assert.equal(requests.at(-1).path,`/api/ai-agents/7/conversation/session/connection-resume/connections/${id}/resume`);
+ assert.deepEqual(Object.keys(journal()[0]).sort(),['conversationKey','createdAt','messageHash','requestId']);
+ assert.equal(JSON.stringify(journal()).includes(id),false);
+ response=actionReceipt();await resumeAssistantConnection(7,session,id);assert.equal(journal().length,0);
+ response=reply({canceled:true});await cancelAssistantConnection(7,session,id);assert.equal(requests.at(-1).method,'DELETE');
+});
+test('malformed continuation IDs never invoke a resume endpoint',async()=>{
+ authenticate();const session=await openCurrentSession('connection-invalid');const before=requests.length;
+ await assert.rejects(resumeAssistantConnection(7,session,'not-a-uuid'),/saved connection/);assert.equal(requests.length,before);
 });

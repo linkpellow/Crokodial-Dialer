@@ -111,3 +111,12 @@ test('account changes while reading screenshot bytes stop before the native uplo
  await assert.rejects(pending,/account changed/);
  assert.equal(calls,0);assert.deepEqual(events,[]);
 });
+
+test('mailbox search consent requests explicit capabilities without broadening old history-only calls',async()=>{
+ const result={authorizationUrl:'https://fixture.invalid/api/auth/google/mail/desktop/authorize?ticket=TEST-once',expiresAt:new Date(Date.now()+60000).toISOString()};
+ serve=response(result);await api.beginGmailConnection(['mailbox_read','history']);
+ assert.deepEqual(requests.at(-1).body,{history:true,capabilities:['send','history','mailbox_read']});
+ await api.beginGmailConnection(['history']);
+ assert.deepEqual(requests.at(-1).body,{history:true,capabilities:['send','history']});
+ const before=requests.length;await assert.rejects(api.beginGmailConnection(['unknown']),/Unknown Gmail/);assert.equal(requests.length,before);
+});

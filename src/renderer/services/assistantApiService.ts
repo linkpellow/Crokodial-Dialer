@@ -1,4 +1,5 @@
 import { authenticatedFetch, getStoredUser } from './dialerApiService';
+import { parseConnectionRequired, type AssistantConnectionRequired } from './assistantConnections';
 import type { WorkspaceMessage } from './assistantWorkspaceTypes';
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
@@ -12,6 +13,22 @@ export interface AssistantReply {
   proposedActions?: Array<{ name: string }>;
   confirmedOutcomes?: Array<{ actionId: string; state: string }>;
   goal?: { id: string; status: string };
+  connectionRequired?: AssistantConnectionRequired;
+}
+
+export interface AssistantPendingConnection {
+  id: string; originalRequest: string; connectionRequired: AssistantConnectionRequired;
+  state: 'waiting_connection' | 'ready' | 'account_changed'; createdAt: number;
+}
+function pendingConnections(value: unknown): AssistantPendingConnection[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) throw new Error('Saved connection requests could not be read.');
+  return value.map(item => {
+    const connectionRequired = parseConnectionRequired(item?.connectionRequired);
+    if (!item || !uuid.test(item.id) || typeof item.originalRequest !== 'string' || !item.originalRequest.trim() || item.originalRequest.length > 15000 || !connectionRequired ||
+      !['waiting_connection','ready','account_changed'].includes(item.state) || !Number.isFinite(item.createdAt)) throw new Error('Saved connection requests could not be read.');
+    return { id: item.id, originalRequest: item.originalRequest, connectionRequired, state: item.state, createdAt: item.createdAt };
+  });
 }
 
 export interface AssistantIntelligenceStatus { environment: 'sandbox' | 'production'; memoryEnabled: boolean; planningEnabled: boolean; memoryMode: string }
@@ -47,10 +64,6 @@ export async function listPersonalAssistants(): Promise<AssistantAgent[]> {
 export async function listInsurancePlans(): Promise<InsurancePlan[]> {
   return (await request<{ plans: InsurancePlan[] }>('/api/insurance-plans')).plans;
 }
-type ConversationRoute = 'conversation' | 'test';
-// A capability decision is attached to the created session, not cached globally
-// across accounts or reconsidered after a mutation has reached the server.
-const conversationRoutes = new Map<string, ConversationRoute>();
 type OwnerConversationBinding = { environment: AssistantIntelligenceStatus['environment']; conversationKey: string };
 const ownerConversations = new Map<string, OwnerConversationBinding>();
 type UnresolvedRequest = { requestId: string; messageHash: string; conversationKey: string; createdAt: number };
@@ -76,6 +89,11 @@ function saveUnresolvedRequests(key: string, records: UnresolvedRequest[]): void
     if (localStorage.getItem(key) !== value) throw new Error();
   } catch { throw new Error('The assistant could not preserve this request for safe retries. No new message was sent. Restore local storage before retrying.'); }
 }
+function migrateUnresolvedConversation(ownerKey:string,environment:AssistantIntelligenceStatus['environment'],legacy:string|null,canonical:string):void {
+  if(!legacy||legacy===canonical)return;
+  const journalKey=`${ownerKey}:unresolved:${environment}`,records=readUnresolvedRequests(journalKey);
+  if(records.some(item=>item.conversationKey===legacy))saveUnresolvedRequests(journalKey,records.map(item=>item.conversationKey===legacy?{...item,conversationKey:canonical}:item));
+}
 async function ownerRequestIdentity(agentId: number, sessionId: string, message: string) {
   const ownerKey = conversationStorageKey(agentId), binding = ownerConversations.get(`${ownerKey}:${sessionId}`);
   if (!binding) throw new Error('Reopen this assistant conversation before continuing.');
@@ -94,30 +112,25 @@ async function ownerRequestIdentity(agentId: number, sessionId: string, message:
   return { journalKey, ownerKey, record, retry: false };
 }
 const routeKey = (agentId: number, sessionId: string) => `${conversationStorageKey(agentId)}:${sessionId}`;
-function sessionRoute(agentId: number, sessionId: string): ConversationRoute {
-  const route = conversationRoutes.get(routeKey(agentId, sessionId));
-  if (!route) throw new Error('Reopen this assistant conversation before continuing.');
-  return route;
+function ownerConversation(agentId: number, sessionId: string): OwnerConversationBinding {
+  const binding = ownerConversations.get(routeKey(agentId, sessionId));
+  if (!binding) throw new Error('Reopen this assistant conversation before continuing.');
+  return binding;
 }
 export async function startAssistantSession(agentId: number): Promise<string> {
   const ownerKey = conversationStorageKey(agentId);
-  let route: ConversationRoute = 'conversation', status: AssistantIntelligenceStatus | undefined;
-  try { status = await readAssistantSessionSettings(agentId); }
-  catch (error) {
-    // This exact server-level absence means the capability is not deployed.
-    // Missing agents, denied access, malformed replies and outages are not
-    // permission to switch execution contracts.
-    if (error instanceof AssistantApiError && error.status === 404 && error.code === 'NOT_FOUND' && error.message === 'API endpoint not found') route = 'test';
-    else throw error;
-  }
+  const status = await readAssistantSessionSettings(agentId);
   if (conversationStorageKey(agentId) !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
-  const conversationKey = route === 'conversation' ? assistantConversationKey(agentId, true, status!.memoryMode) : null;
-  const result = await request<{ sessionId: string }>(`/api/ai-agents/${agentId}/${route}/session`, { method: 'POST', body: JSON.stringify(conversationKey ? { conversationKey } : {}) });
+  const legacyConversationKey = legacyAssistantConversationKey(agentId);
+  const result = await request<{ sessionId: string; conversationKey: string }>(`/api/ai-agents/${agentId}/conversation/session`, { method: 'POST', body: '{}' });
   if (!result.sessionId) throw new Error('Crokodial did not create a conversation.');
   // Never associate an earlier account's in-flight creation with a new sign-in.
   if (conversationStorageKey(agentId) !== ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
-  conversationRoutes.set(`${ownerKey}:${result.sessionId}`, route);
-  if (route === 'conversation') ownerConversations.set(`${ownerKey}:${result.sessionId}`, { environment: status!.environment, conversationKey: conversationKey ?? result.sessionId });
+  const conversationKey=result.conversationKey;
+  if(typeof conversationKey!=='string'||!conversationKey||conversationKey.length>100)throw new Error('Crokodial did not identify the main conversation.');
+  migrateUnresolvedConversation(ownerKey,status.environment,legacyConversationKey,conversationKey);
+  clearLegacyAssistantConversationKey(agentId);
+  ownerConversations.set(`${ownerKey}:${result.sessionId}`, { environment: status.environment, conversationKey });
   return result.sessionId;
 }
 function conversationStorageKey(agentId: number): string {
@@ -125,45 +138,42 @@ function conversationStorageKey(agentId: number): string {
   if (!user || !Number.isSafeInteger(user.id) || !Number.isSafeInteger(user.tenant_id) || user.id <= 0 || user.tenant_id! <= 0) throw new Error('Sign in to restore this conversation.');
   return `crokodial_assistant_conversation:${API_BASE}:${user.tenant_id}:${user.id}:${agentId}`;
 }
-/** Only an opaque key is stored locally; server ownership remains authoritative. */
-export function assistantConversationKey(agentId: number, create = false, memoryMode?: string): string | null {
+/** Read an obsolete client-generated key only to migrate retry receipt metadata. */
+function legacyAssistantConversationKey(agentId: number): string | null {
   const storageKey = conversationStorageKey(agentId);
-  if (memoryMode === 'none') { localStorage.removeItem(storageKey); sessionStorage.removeItem(storageKey); return null; }
-  const storage = memoryMode === 'conversation' || memoryMode === 'persistent' ? localStorage : sessionStorage;
-  const saved = memoryMode === undefined ? sessionStorage.getItem(storageKey) ?? localStorage.getItem(storageKey) : storage.getItem(storageKey);
+  const saved = sessionStorage.getItem(storageKey) ?? localStorage.getItem(storageKey);
   if (saved && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(saved)) return saved;
-  if (!create) return null;
-  const value = crypto.randomUUID(); storage.setItem(storageKey, value); return value;
+  return null;
 }
-export function forgetAssistantConversationKey(agentId: number): void { const key = conversationStorageKey(agentId); localStorage.removeItem(key); sessionStorage.removeItem(key); }
+function clearLegacyAssistantConversationKey(agentId: number): void { const key = conversationStorageKey(agentId); localStorage.removeItem(key); sessionStorage.removeItem(key); }
 export function assistantSessionUsesOwnerContext(agentId: number, sessionId: string): boolean {
-  return sessionRoute(agentId, sessionId) === 'conversation';
+  ownerConversation(agentId, sessionId);
+  return true;
 }
-/** Restore only the selected session's transcript. A read failure never changes its execution contract. */
-export async function readAssistantConversation(agentId: number, sessionId: string): Promise<{ sessionId: string; messages: WorkspaceMessage[] }> {
-  const route = sessionRoute(agentId, sessionId);
-  if (route !== 'conversation') return { sessionId, messages: [] };
-  const value = await request<{ sessionId: string; messages: WorkspaceMessage[] }>(`/api/ai-agents/${agentId}/conversation/session/${encodeURIComponent(sessionId)}`);
+/** Restore the server-selected main conversation's transcript. */
+export async function readAssistantConversation(agentId: number, sessionId: string, before?:number): Promise<{ sessionId: string; messages: WorkspaceMessage[]; pendingConnections: AssistantPendingConnection[];hasMore:boolean;nextBefore?:number }> {
+  ownerConversation(agentId, sessionId);
+  const query=before===undefined?'':`?before=${encodeURIComponent(String(before))}&limit=200`;
+  const value = await request<{ sessionId: string; messages: WorkspaceMessage[]; pendingConnections?: AssistantPendingConnection[];hasMore?:boolean;nextBefore?:number }>(`/api/ai-agents/${agentId}/conversation/session/${encodeURIComponent(sessionId)}${query}`);
   if (value?.sessionId !== sessionId || !Array.isArray(value.messages) || value.messages.some(message =>
-    !message || typeof message.id !== 'string' || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string' || !Number.isFinite(message.createdAt))) throw new Error('The saved conversation could not be read.');
-  return value;
+    !message || typeof message.id !== 'string' || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string' || !Number.isFinite(message.createdAt) || !Number.isSafeInteger(message.sequence) || message.sequence<=0) || typeof value.hasMore!=='boolean' || value.nextBefore!==undefined&&(!Number.isSafeInteger(value.nextBefore)||value.nextBefore<=0)) throw new Error('The saved conversation could not be read.');
+  return { ...value,hasMore:value.hasMore, pendingConnections: pendingConnections(value.pendingConnections) };
 }
 export async function sendAssistantMessage(agentId: number, sessionId: string, message: string, workspacePlanHistory: string[] = [], onRequest?: (requestId: string) => void): Promise<AssistantReply> {
-  const route = sessionRoute(agentId, sessionId);
-  const identity = route === 'conversation' ? await ownerRequestIdentity(agentId, sessionId, message) : undefined;
-  if (identity) onRequest?.(identity.record.requestId);
-  const result = await request<AssistantReply>(`/api/ai-agents/${agentId}/${route}/message`, {
+  ownerConversation(agentId, sessionId);
+  const identity = await ownerRequestIdentity(agentId, sessionId, message);
+  onRequest?.(identity.record.requestId);
+  const result = await request<AssistantReply>(`/api/ai-agents/${agentId}/conversation/message`, {
     method: 'POST', body: JSON.stringify({ sessionId, message, workspacePlanHistory,
-      ...(route === 'test' ? { audience: 'agent' } : { requestId: identity!.record.requestId }) }),
+      requestId: identity.record.requestId }),
   });
-  if (identity && conversationStorageKey(agentId) !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation to review its original request.');
+  if (conversationStorageKey(agentId) !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation to review its original request.');
   if (result?.success !== true || typeof result.message !== 'string' || !result.message.trim()) throw new Error(result?.error || 'The assistant could not produce a response.');
-  if (route === 'test') {
-    // Legacy private preview responses cannot attest owner action execution.
-    return { success: result.success, message: result.message, model: result.model,
-      grounding: result.grounding, citations: result.citations,
-      proposedActions: result.proposedActions?.map(action => ({ name: action.name })) };
-  }
+  return acceptOwnerReply(result, identity);
+}
+function acceptOwnerReply(result: AssistantReply, identity: Awaited<ReturnType<typeof ownerRequestIdentity>> | undefined): AssistantReply {
+  const connectionRequired = parseConnectionRequired(result.connectionRequired);
+  if (connectionRequired) result.connectionRequired = connectionRequired;
   const outcomes = Array.isArray(result.confirmedOutcomes) ? result.confirmedOutcomes : undefined;
   const outcomesValid = result.confirmedOutcomes === undefined || outcomes !== undefined && outcomes.every(item =>
     item && typeof item.actionId === 'string' && uuid.test(item.actionId) && ['pending','ready','executing','submitted','succeeded','failed','rejected','expired','unknown'].includes(item.state));
@@ -177,19 +187,21 @@ export async function sendAssistantMessage(agentId: number, sessionId: string, m
   }
   return result;
 }
-export async function disposeAssistantSession(agentId: number, sessionId: string): Promise<void> {
-  const route = sessionRoute(agentId, sessionId), key = routeKey(agentId, sessionId);
-  try {
-    await request(`/api/ai-agents/${agentId}/${route}/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
-    conversationRoutes.delete(key);
-    ownerConversations.delete(key);
-  } catch (error) {
-    // Sessions may have expired or already been cleared.
-    // Only that exact absence completes reset; missing agents and auth errors
-    // still need to reach the caller without discarding its local conversation.
-    if (error instanceof AssistantApiError && error.status === 404 && error.code === 'NOT_FOUND' && error.message === (route === 'test' ? 'Test session not found' : 'Assistant conversation not found')) { conversationRoutes.delete(key); ownerConversations.delete(key); return; }
-    throw error;
-  }
+/** Resume only the server's saved prerequisite. Reconnection itself never executes this call. */
+export async function resumeAssistantConnection(agentId: number, sessionId: string, continuationId: string, onRequest?: (requestId: string) => void): Promise<AssistantReply> {
+  ownerConversation(agentId, sessionId);
+  if (!uuid.test(continuationId)) throw new Error('Reopen the saved connection request.');
+  const identity = await ownerRequestIdentity(agentId, sessionId, `resume-connection:${continuationId}`);
+  onRequest?.(identity.record.requestId);
+  const result = await request<AssistantReply>(`/api/ai-agents/${agentId}/conversation/session/${encodeURIComponent(sessionId)}/connections/${continuationId}/resume`, { method: 'POST', body: JSON.stringify({ requestId: identity.record.requestId }) });
+  if (conversationStorageKey(agentId) !== identity.ownerKey) throw new Error('The signed-in account changed. Reopen the conversation.');
+  if (result?.success !== true || typeof result.message !== 'string' || !result.message.trim()) throw new Error(result?.error || 'The saved request could not be resumed.');
+  return acceptOwnerReply(result, identity);
+}
+export async function cancelAssistantConnection(agentId: number, sessionId: string, continuationId: string): Promise<void> {
+  ownerConversation(agentId, sessionId);
+  if (!uuid.test(continuationId)) throw new Error('Reopen the saved connection request.');
+  await request(`/api/ai-agents/${agentId}/conversation/session/${encodeURIComponent(sessionId)}/connections/${continuationId}`, { method: 'DELETE' });
 }
 export async function openPlatform(path: '/plans' | '/ai-assistants'): Promise<void> {
   if (!API_BASE) throw new Error('Crokodial connection is not configured.');
