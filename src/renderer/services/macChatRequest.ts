@@ -180,13 +180,18 @@ export function parseMacChatRequest(value: string): MacChatRequest | null {
     return query.length >= 2 ? { kind: 'whatsapp.read', query } : null;
   }
 
+  // Generic “my contacts” must retain an explicitly named Google source.
+  // A named Mac/Apple/iCloud source still selects a local Contacts request.
+  const namedLocalContacts = /\b(?:(?:mac|apple|icloud|local)\s+(?:contacts?|address\s+book)|(?:contacts?|address\s+book)\s+(?:on|in|from)\s+(?:my\s+)?(?:mac|icloud))\b/i.test(source);
+  const googleContacts = /\bgoogle\s+contacts?\b/i.test(source);
+  const explicitLocalContacts = namedLocalContacts || !googleContacts && /\bmy\s+(?:contacts?|address\s+book)\b/i.test(source);
+
   const unknownNumber = source.match(/\b(?:who(?:se)?(?:\s+is)?|identify|match|look\s*up|find)\b[\s\S]{0,40}?((?:\+?[0-9][0-9().\-\s]{5,38}[0-9]))/i);
-  if (unknownNumber) {
+  if (unknownNumber && (!googleContacts || namedLocalContacts)) {
     const query = phone(unknownNumber[1]);
     if (query) return { kind: 'contacts.search', query, unknownNumber: true };
   }
 
-  const explicitLocalContacts = /\b(?:(?:mac|apple|icloud|local|my)\s+(?:contacts?|address\s+book)|(?:contacts?|address\s+book)\s+(?:on|in|from)\s+(?:my\s+)?(?:mac|icloud)|my\s+contact\b)/i.test(source);
   if (/\b(?:contacts?|address\s+book)\b/i.test(source)
     && /\b(?:find|search|look\s*up|check|match|identify|show)\b/i.test(source)
     && explicitLocalContacts) {

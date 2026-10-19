@@ -28,6 +28,30 @@ test('saved natural-language turns deterministically reconstruct bounded local r
   assert.equal(parseMacChatRequest('What are text messages?'), null);
 });
 
+test('Google Contacts connection and read requests never reconstruct a local Contacts request', () => {
+  for (const message of [
+    'Connect Google Contacts for read-only searching and reading my contacts. Show the connection card here.',
+    'Please connect Google Contacts for read-only searching. Show my contacts.',
+    'Search my Google Contacts for Jane Doe.',
+    'Find Jane Doe in Google Contacts.',
+    'Find +1 (202) 555-0173 in Google Contacts.',
+    'Who is +1 (202) 555-0173 in Google Contacts?',
+  ]) {
+    assert.equal(parseMacChatRequest(message), null, message);
+    const first = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-google-contacts', text: message }));
+    const restored = renderToStaticMarkup(React.createElement(InlineMacRequestCard, { turnId: 'saved-google-contacts', text: message }));
+    assert.equal(first, '', 'A Google Contacts turn must not add a local Contacts card');
+    assert.equal(restored, '', 'Restoring a saved Google Contacts turn must not add a local Contacts card');
+  }
+});
+
+test('explicit Mac and iCloud Contacts requests retain their local source even for Google Contacts search text', () => {
+  assert.deepEqual(parseMacChatRequest('Find Jane Doe in my Mac Contacts'), { kind: 'contacts.search', query: 'Jane Doe', unknownNumber: false });
+  assert.deepEqual(parseMacChatRequest('Search my iCloud Contacts for "Google Contacts"'), { kind: 'contacts.search', query: 'Google Contacts', unknownNumber: false });
+  assert.deepEqual(parseMacChatRequest('Find +1 (202) 555-0173 in my Apple Contacts'), { kind: 'contacts.search', query: '+1 (202) 555-0173', unknownNumber: true });
+  assert.deepEqual(parseMacChatRequest('Find Jane Doe in my contacts'), { kind: 'contacts.search', query: 'Jane Doe', unknownNumber: false });
+});
+
 test('generic SMS stays on the CRM/Telnyx path while explicit Apple Messages requests retain exact text', () => {
   for (const generic of [
     'Text Link saying I will call tomorrow!',
